@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+node_modules/
+.next/
+mlruns/
+data/
+outputs/
+multirun/
+.pytest_cache/
+.ruff_cache/
