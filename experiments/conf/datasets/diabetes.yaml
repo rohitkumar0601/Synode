@@ -1,0 +1,23 @@
+# @package dataset
+name: diabetes
+source: openml
+openml_name: null
+version: null
+openml_id: 4541
+path: null
+target: readmitted
+drop: [encounter_id, patient_nbr]
+column_types: {discharge_disposition_id: categorical, admission_source_id: categorical}
+# Public numeric bounds for DP generators (0 epsilon): from documentation, never the data.
+# Source: https://archive.ics.uci.edu/dataset/296/diabetes+130-us+hospitals+for+years+1999-2008
+#   (inclusion criterion: length of stay at least 1 and at most 14 days). The page gives no
+#   ranges for the count columns, so those are generous domain assumptions.
+public_bounds:
+  time_in_hospital: [1, 14]        # inclusion criterion: stay of 1..14 days
+  num_lab_procedures: [0, 200]     # assumption: lab tests in one encounter, generous cap
+  num_medications: [0, 200]        # assumption: distinct medications in one encounter, generous cap
+  number_outpatient: [0, 365]      # assumption: visits in the preceding year, at most one per day
+  number_emergency: [0, 365]       # as number_outpatient
+  number_inpatient: [0, 365]       # as number_outpatient
+  number_diagnoses: [0, 50]        # assumption: diagnoses entered for the encounter, generous cap
+public_log_scale: [number_outpatient, number_emergency, number_inpatient]

@@ -1,0 +1,22 @@
+defaults:
+  - datasets: adult
+  - generators: default
+  - _self_
+
+run_id: null
+seeds: [0, 1, 2]
+max_rows: 20000
+storage_root: outputs/store
+tracking_uri: sqlite:///outputs/mlflow.db
+generators_to_run: [train_copy, independent_marginals, marginals, gaussian_copula,
+                    bayesian_network, ctgan, tvae, mst_eps0.1, mst_eps1, mst_eps10]
+budget:
+  epochs: 300
+  time_cap_seconds: 7200
+eval:
+  n_attacks: 500
+  singling_out_mode: multivariate
+  max_rows_knn: 5000
+  inference_secrets: all
+  min_attacks: 100
+  family_alpha: 0.05

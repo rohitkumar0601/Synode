@@ -10,3 +10,7 @@ outputs/
 multirun/
 .pytest_cache/
 .ruff_cache/
+mlartifacts/
+*.db
+third_party/
+workspace/

@@ -1,0 +1,294 @@
+suite: 99
+datasets:
+- id: 3
+  name: kr-vs-kp
+  target: class
+  n_instances: 3196
+  n_features: 36
+  n_classes: 2
+- id: 11
+  name: balance-scale
+  target: class
+  n_instances: 625
+  n_features: 4
+  n_classes: 3
+- id: 15
+  name: breast-w
+  target: Class
+  n_instances: 699
+  n_features: 9
+  n_classes: 2
+- id: 18
+  name: mfeat-morphological
+  target: class
+  n_instances: 2000
+  n_features: 6
+  n_classes: 10
+- id: 22
+  name: mfeat-zernike
+  target: class
+  n_instances: 2000
+  n_features: 47
+  n_classes: 10
+- id: 23
+  name: cmc
+  target: Contraceptive_method_used
+  n_instances: 1473
+  n_features: 9
+  n_classes: 3
+- id: 29
+  name: credit-approval
+  target: class
+  n_instances: 690
+  n_features: 15
+  n_classes: 2
+- id: 31
+  name: credit-g
+  target: class
+  n_instances: 1000
+  n_features: 20
+  n_classes: 2
+- id: 32
+  name: pendigits
+  target: class
+  n_instances: 10992
+  n_features: 16
+  n_classes: 10
+- id: 37
+  name: diabetes
+  target: class
+  n_instances: 768
+  n_features: 8
+  n_classes: 2
+- id: 38
+  name: sick
+  target: Class
+  n_instances: 3772
+  n_features: 29
+  n_classes: 2
+- id: 44
+  name: spambase
+  target: class
+  n_instances: 4601
+  n_features: 57
+  n_classes: 2
+- id: 46
+  name: splice
+  target: Class
+  n_instances: 3190
+  n_features: 60
+  n_classes: 3
+- id: 50
+  name: tic-tac-toe
+  target: Class
+  n_instances: 958
+  n_features: 9
+  n_classes: 2
+- id: 54
+  name: vehicle
+  target: Class
+  n_instances: 846
+  n_features: 18
+  n_classes: 4
+- id: 182
+  name: satimage
+  target: class
+  n_instances: 6430
+  n_features: 36
+  n_classes: 6
+- id: 188
+  name: eucalyptus
+  target: Utility
+  n_instances: 736
+  n_features: 19
+  n_classes: 5
+- id: 307
+  name: vowel
+  target: Class
+  n_instances: 990
+  n_features: 12
+  n_classes: 11
+- id: 469
+  name: analcatdata_dmft
+  target: Prevention
+  n_instances: 797
+  n_features: 4
+  n_classes: 6
+- id: 1049
+  name: pc4
+  target: c
+  n_instances: 1458
+  n_features: 37
+  n_classes: 2
+- id: 1050
+  name: pc3
+  target: c
+  n_instances: 1563
+  n_features: 37
+  n_classes: 2
+- id: 1053
+  name: jm1
+  target: defects
+  n_instances: 10885
+  n_features: 21
+  n_classes: 2
+- id: 1063
+  name: kc2
+  target: problems
+  n_instances: 522
+  n_features: 21
+  n_classes: 2
+- id: 1067
+  name: kc1
+  target: defects
+  n_instances: 2109
+  n_features: 21
+  n_classes: 2
+- id: 1068
+  name: pc1
+  target: defects
+  n_instances: 1109
+  n_features: 21
+  n_classes: 2
+excluded:
+- id: 6
+  name: letter
+  reason: classes 26 outside [2, 20]
+- id: 12
+  name: mfeat-factors
+  reason: features 216 > 60
+- id: 14
+  name: mfeat-fourier
+  reason: features 76 > 60
+- id: 16
+  name: mfeat-karhunen
+  reason: features 64 > 60
+- id: 28
+  name: optdigits
+  reason: features 64 > 60
+- id: 151
+  name: electricity
+  reason: instances 45312 outside [500, 20000]
+- id: 300
+  name: isolet
+  reason: features 617 > 60
+- id: 458
+  name: analcatdata_authorship
+  reason: features 70 > 60
+- id: 554
+  name: mnist_784
+  reason: instances 70000 outside [500, 20000]
+- id: 1461
+  name: bank-marketing
+  reason: instances 45211 outside [500, 20000]
+- id: 1462
+  name: banknote-authentication
+  reason: 'cap: beyond max_n'
+- id: 1464
+  name: blood-transfusion-service-center
+  reason: 'cap: beyond max_n'
+- id: 1468
+  name: cnae-9
+  reason: features 856 > 60
+- id: 1475
+  name: first-order-theorem-proving
+  reason: 'cap: beyond max_n'
+- id: 1478
+  name: har
+  reason: features 561 > 60
+- id: 1480
+  name: ilpd
+  reason: 'cap: beyond max_n'
+- id: 1485
+  name: madelon
+  reason: features 500 > 60
+- id: 1486
+  name: nomao
+  reason: instances 34465 outside [500, 20000]
+- id: 1487
+  name: ozone-level-8hr
+  reason: features 72 > 60
+- id: 1489
+  name: phoneme
+  reason: 'cap: beyond max_n'
+- id: 1494
+  name: qsar-biodeg
+  reason: 'cap: beyond max_n'
+- id: 1497
+  name: wall-robot-navigation
+  reason: 'cap: beyond max_n'
+- id: 1501
+  name: semeion
+  reason: features 256 > 60
+- id: 1510
+  name: wdbc
+  reason: 'cap: beyond max_n'
+- id: 1590
+  name: adult
+  reason: instances 48842 outside [500, 20000]
+- id: 4134
+  name: Bioresponse
+  reason: features 1776 > 60
+- id: 4534
+  name: PhishingWebsites
+  reason: 'cap: beyond max_n'
+- id: 4538
+  name: GesturePhaseSegmentationProcessed
+  reason: 'cap: beyond max_n'
+- id: 6332
+  name: cylinder-bands
+  reason: 'cap: beyond max_n'
+- id: 23381
+  name: dresses-sales
+  reason: 'cap: beyond max_n'
+- id: 23517
+  name: numerai28.6
+  reason: instances 96320 outside [500, 20000]
+- id: 40499
+  name: texture
+  reason: 'cap: beyond max_n'
+- id: 40668
+  name: connect-4
+  reason: instances 67557 outside [500, 20000]
+- id: 40670
+  name: dna
+  reason: features 180 > 60
+- id: 40701
+  name: churn
+  reason: 'cap: beyond max_n'
+- id: 40923
+  name: Devnagari-Script
+  reason: instances 92000 outside [500, 20000]
+- id: 40927
+  name: CIFAR_10
+  reason: instances 60000 outside [500, 20000]
+- id: 40966
+  name: MiceProtein
+  reason: features 81 > 60
+- id: 40975
+  name: car
+  reason: 'cap: beyond max_n'
+- id: 40978
+  name: Internet-Advertisements
+  reason: features 1558 > 60
+- id: 40979
+  name: mfeat-pixel
+  reason: features 240 > 60
+- id: 40982
+  name: steel-plates-fault
+  reason: 'cap: beyond max_n'
+- id: 40983
+  name: wilt
+  reason: 'cap: beyond max_n'
+- id: 40984
+  name: segment
+  reason: 'cap: beyond max_n'
+- id: 40994
+  name: climate-model-simulation-crashes
+  reason: 'cap: beyond max_n'
+- id: 40996
+  name: Fashion-MNIST
+  reason: instances 70000 outside [500, 20000]
+- id: 41027
+  name: jungle_chess_2pcs_raw_endgame_complete
+  reason: instances 44819 outside [500, 20000]

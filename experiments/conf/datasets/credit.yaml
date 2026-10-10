@@ -1,0 +1,37 @@
+# @package dataset
+name: credit
+source: openml
+openml_name: null
+version: null
+openml_id: 46373
+path: null
+target: y
+drop: []
+column_types: {}
+# Public numeric bounds for DP generators (0 epsilon): from documentation, never the data.
+# Source: https://archive.ics.uci.edu/dataset/350/default+of+credit+card+clients
+#   (x1 credit amount and x12-x23 in NT dollars, x5 age in years, x6-x11 repayment status
+#   "-1 = pay duly; 1..8 = months of delay; 9 = nine months and above"). The codebook gives
+#   no currency ranges, so those are generous domain assumptions.
+public_bounds:
+  x1: [0, 2000000]             # assumption: credit limit in NT$, nonnegative, generous cap
+  x5: [18, 100]                # assumption: adult card holders; generous upper age
+  x6: [-2, 9]                  # codebook scale -1..9; assumption: -2 kept as the undocumented "no consumption" code
+  x7: [-2, 9]                  # as x6
+  x8: [-2, 9]                  # as x6
+  x9: [-2, 9]                  # as x6
+  x10: [-2, 9]                 # as x6
+  x11: [-2, 9]                 # as x6
+  x12: [-1000000, 2000000]     # assumption: bill statement in NT$; negative = credit balance
+  x13: [-1000000, 2000000]     # as x12
+  x14: [-1000000, 2000000]     # as x12
+  x15: [-1000000, 2000000]     # as x12
+  x16: [-1000000, 2000000]     # as x12
+  x17: [-1000000, 2000000]     # as x12
+  x18: [0, 2000000]            # assumption: amount paid in NT$, nonnegative, generous cap
+  x19: [0, 2000000]            # as x18
+  x20: [0, 2000000]            # as x18
+  x21: [0, 2000000]            # as x18
+  x22: [0, 2000000]            # as x18
+  x23: [0, 2000000]            # as x18
+public_log_scale: [x1, x18, x19, x20, x21, x22, x23]

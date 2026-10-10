@@ -1,0 +1,34 @@
+[project]
+name = "stl-meta"
+version = "0.1.0"
+description = "Meta-learning worker: dataset selection, meta-features, best-generator prediction (RQ3)"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "stl-core",
+  "stl-runner[s3,celery]",
+  "pymfe==0.4.4",
+  "openml",
+  "scikit-learn>=1.3",
+  "joblib",
+  "pyyaml",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[tool.uv.sources]
+stl-core = { path = "../../packages/core", editable = true }
+stl-runner = { path = "../../packages/runner", editable = true }
+pymfe = { path = "../../third_party/pymfe", editable = true }
+openml = { path = "../../third_party/openml-python", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/stl_meta"]
+
+[tool.pytest.ini_options]
+markers = ["network: needs internet access (OpenML)", "slow: takes more than a minute"]
+filterwarnings = ["ignore::FutureWarning", "ignore::DeprecationWarning"]

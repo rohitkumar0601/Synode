@@ -1,0 +1,23 @@
+# @package dataset
+name: adult
+source: openml
+openml_name: adult
+version: 2
+openml_id: null
+path: null
+target: class
+drop: []
+column_types: {}
+# Public numeric bounds for DP generators (0 epsilon): from documentation, never the data.
+# Sources: https://archive.ics.uci.edu/dataset/2/adult and
+#   https://archive.ics.uci.edu/ml/machine-learning-databases/adult/adult.names
+#   (extraction filter AAGE>16 && HRSWK>0; 16 education levels Preschool..Doctorate;
+#   CPS public-use top codes: age 90, capital-gain 99999, hours-per-week 99).
+public_bounds:
+  age: [17, 90]                # extraction AAGE>16; CPS top-codes age at 90
+  fnlwgt: [0, 2000000]         # assumption: CPS person weight (people represented); no codebook bound, generous
+  education-num: [1, 16]       # 16 education levels in adult.names
+  capital-gain: [0, 99999]     # CPS top code 99999
+  capital-loss: [0, 99999]     # assumption: same 5-digit CPS income field as capital-gain
+  hours-per-week: [1, 99]      # extraction HRSWK>0; CPS top code 99
+public_log_scale: [capital-gain, capital-loss]

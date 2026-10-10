@@ -1,0 +1,16 @@
+# @package dataset
+# Generic OpenML dataset for the RQ3 meta-benchmark (scripts/run_meta_benchmark.sh fills in
+# name/openml_id/target via overrides). No codebook was consulted, so there are NO public
+# bounds: MST spends 0.2*epsilon on private bounds for every continuous column ("private"
+# bounds path in runs/<run>/<job>/privacy.json; "none" when there are no continuous columns).
+name: null
+source: openml
+openml_name: null
+version: null
+openml_id: null
+path: null
+target: null
+drop: []
+column_types: {}
+public_bounds: {}
+public_log_scale: []

@@ -1,0 +1,24 @@
+[project]
+name = "stl-smartnoise"
+version = "0.1.0"
+description = "SmartNoise worker: MST (vetted epsilon-DP synthesizer for the RQ2 epsilon sweep)"
+requires-python = ">=3.12,<3.13"
+dependencies = ["stl-core", "stl-runner[s3,celery]", "smartnoise-synth==1.0.8"]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[tool.uv.sources]
+stl-core = { path = "../../packages/core", editable = true }
+stl-runner = { path = "../../packages/runner", editable = true }
+smartnoise-synth = { path = "../../third_party/smartnoise-sdk/synth", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/stl_smartnoise"]
+
+[tool.pytest.ini_options]
+markers = ["slow: takes more than a minute", "network: downloads a model"]

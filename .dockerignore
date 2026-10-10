@@ -1,0 +1,29 @@
+# Build context = repo root (docker/*.Dockerfile). Keep the third_party/ sources the worker
+# images build from (SDV, SDMetrics, anonymeter, synthcity, smartnoise-sdk/synth).
+.git
+**/.git
+**/node_modules
+apps/web/.next
+outputs/
+mlruns/
+.superpowers/
+workspace/
+notebooks/
+**/__pycache__
+**/*.pyc
+**/.venv
+**/.pytest_cache
+**/.ruff_cache
+**/*.egg-info
+**/build
+**/dist
+.env
+# third_party repos no image installs, and large non-package data inside the used ones
+third_party/DataDesigner
+third_party/Safe-Synthesizer
+third_party/autorank
+third_party/smartnoise-sdk/datasets
+third_party/smartnoise-sdk/eval
+third_party/smartnoise-sdk/sql
+third_party/smartnoise-sdk/images
+third_party/smartnoise-sdk/synth/samples

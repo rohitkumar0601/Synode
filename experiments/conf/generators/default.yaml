@@ -1,0 +1,18 @@
+# @package generator_params
+# Per-generator parameters. Deep generators share one epoch budget (equal-budget rule).
+train_copy: {}
+independent_marginals: {}
+marginals: {}
+gaussian_copula: {}
+bayesian_network: {}
+ctgan: {epochs: "${budget.epochs}"}
+tvae: {epochs: "${budget.epochs}"}
+tabddpm: {epochs: "${budget.epochs}"}
+great: {epochs: "${budget.epochs}"}
+mst_eps0.1: {}
+mst_eps1: {}
+mst_eps10: {}
+# synthcity PrivBayes: nominal-DP audit only (not epsilon-DP); not in the default lineup.
+privbayes_eps0.1: {}
+privbayes_eps1: {}
+privbayes_eps10: {}
