@@ -229,13 +229,21 @@ seeds, preset), Run detail (live job progress, scorecard table mean ± std, 2D/3
 preset switcher/custom weights, recommendation card with reason, gate failures), Schema mode
 (define columns/samplers/rules, generate, rule-validity score).
 
-## 10. RQ3 (`experiments/meta`)
+## 10. RQ3 (`workers/meta`)
 
-Pull ~25 small OpenML-CC18 classification datasets; run fast generators (marginals, Copula,
-BayesNet, CTGAN with a low epoch cap) × 3 seeds; label each dataset's winner by Balanced
-score among gate-passing candidates; extract pymfe meta-features (general, statistical,
-info-theory); train a small RandomForest; leave-one-dataset-out accuracy vs always-pick-the-
-overall-winner baseline. Serialised model is served by `q.eval` for `/datasets/{id}/predict`.
+Pull 25 small OpenML-CC18 classification datasets (`experiments/conf/meta/datasets.yaml`);
+run fast generators (`independent_marginals`, `gaussian_copula`, `bayesian_network`, `ctgan`,
+`tvae`, `mst_eps1` + `train_copy` sanity ceiling) × 3 seeds with budget cap (50 epochs, 5,000 rows);
+label each dataset's winner by Balanced score among gate-passing candidates (datasets with no
+gate-passing candidate labelled `none` and reported, excluded from accuracy); extract `pymfe`
+meta-features (groups `general`, `statistical`, `info-theory`, summary `mean` and `sd`) on the
+seed-0 TRAIN split; train a `RandomForestClassifier(n_estimators=300, random_state=0, class_weight="balanced")`;
+evaluate via leave-one-dataset-out (LODO) cross-validation with train-fold imputation and baseline
+"always predict majority winner in training folds", recording accuracy, balanced accuracy, and mean regret.
+Exploratory framing: reported honestly even if sample size yields modest raw accuracy vs baseline.
+Serialised predictor (`meta/predictor.joblib` and `meta/predictor.json`) is served by `worker-meta`
+on queue `q.meta` (`stl.metafeatures` Celery task) for `GET /datasets/{id}/suggestion` and the web UI.
+
 
 ## 11. Data Designer track
 

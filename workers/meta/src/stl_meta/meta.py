@@ -17,7 +17,6 @@ import sklearn
 import yaml
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, balanced_accuracy_score
-
 from stl_core.aggregate import aggregate
 from stl_core.decision import recommend
 from stl_core.schemas import MetricReport
@@ -101,7 +100,9 @@ def _feature_columns(df: pd.DataFrame) -> list[str]:
     )
 
 
-def _median_impute(train: pd.DataFrame, test: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, float]]:
+def _median_impute(
+    train: pd.DataFrame, test: pd.DataFrame
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, float]]:
     train = train.replace([np.inf, -np.inf], np.nan)
     test = test.replace([np.inf, -np.inf], np.nan)
     med = train.median(numeric_only=True).fillna(0.0)
@@ -123,7 +124,8 @@ def _regret(row: pd.Series, pred: str) -> float | None:
 
 def lodo_evaluate(meta_df: pd.DataFrame) -> dict[str, Any]:
     """Leave-one-dataset-out evaluation with train-fold imputation and baseline."""
-    eligible = meta_df[meta_df["label"].notna() & (meta_df["label"] != "none")].reset_index(drop=True)
+    mask = meta_df["label"].notna() & (meta_df["label"] != "none")
+    eligible = meta_df[mask].reset_index(drop=True)
     features = _feature_columns(eligible)
     predictions: list[dict[str, Any]] = []
     if eligible.empty or not features:
@@ -194,7 +196,9 @@ def train_final(meta_df: pd.DataFrame) -> dict[str, Any]:
     }
 
 
-def save_predictor(store: ArtifactStore, artifact: dict[str, Any], summary: dict[str, Any] | None = None) -> None:
+def save_predictor(
+    store: ArtifactStore, artifact: dict[str, Any], summary: dict[str, Any] | None = None
+) -> None:
     buf = io.BytesIO()
     joblib.dump(artifact, buf)
     store.write_bytes(keys.meta_predictor(), buf.getvalue())

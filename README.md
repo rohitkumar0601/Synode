@@ -112,3 +112,48 @@ with `-o '~dataset.public_bounds' -o '~dataset.public_log_scale'` (then MST spen
 inferring bounds privately) or give your own with `-o '+dataset.public_bounds={col:[lo,hi]}'`
 after the removal. The resolved bounds' sha256 is recorded per job in `privacy.json`, which result
 bundles carry when present.
+
+## RQ3: Meta-Learning Best-Generator Predictor
+
+Answers RQ3: *Can a meta-model predict the best generator from dataset meta-features alone?*
+
+### Protocol
+1. **Dataset Suite:** 25 OpenML-CC18 classification datasets (`experiments/conf/meta/datasets.yaml`) filtered by strict criteria (500–20,000 instances, ≤60 features, ≤20 classes, minority class ≥25 rows).
+2. **Generators & Budget:** Fast CPU lineup (`independent_marginals`, `gaussian_copula`, `bayesian_network`, `ctgan`, `tvae`, `mst_eps1` + `train_copy` as sanity ceiling). Budget: 50 epochs, max 5,000 rows, 3 seeds.
+3. **Winner Labelling:** Generator with the highest balanced fidelity-utility-privacy score among candidates passing the privacy gate. Datasets where every generator fails the gate are labelled `none` and reported, but excluded from accuracy calculations.
+4. **Meta-Features:** `pymfe` groups `general`, `statistical`, and `info-theory` (mean and standard deviation summaries) computed on seed-0 TRAIN split.
+5. **Evaluation:** Leave-One-Dataset-Out (LODO) cross-validation with a `RandomForestClassifier` vs an always-predict-the-most-frequent-winner baseline. Regret (loss in balanced score vs ex-post optimal) is reported alongside accuracy.
+
+### Running on Owner Compute
+
+Run the complete meta-benchmark across all 25 datasets:
+```bash
+bash scripts/run_meta_benchmark.sh --seeds 0,1,2 --epochs 50 --max-rows 5000
+```
+Expected runtime is approximately 3–6 hours on modern multi-core CPU. Smoke verification on a subset:
+```bash
+bash scripts/run_meta_benchmark.sh --limit 2 --seeds 0 --epochs 2
+```
+
+### Evaluating and Retraining the Predictor
+
+Compute meta-features for all registered datasets:
+```bash
+bash scripts/envrun.sh meta python experiments/run.py metafeatures --all-registered
+```
+
+Run LODO evaluation and train the final predictor:
+```bash
+bash scripts/envrun.sh meta python experiments/run.py meta-eval
+```
+Artifacts saved to `outputs/store/`:
+- `meta/lodo.json` — LODO accuracy, balanced accuracy, mean regret, and per-dataset predictions.
+- `meta/predictor.joblib` — Trained model bundle (RandomForest, feature list, training fold medians, labels).
+- `meta/predictor.json` — Metadata and feature list for inference.
+
+Analyze results and plots:
+Launch `notebooks/rq3_meta.ipynb` to inspect accuracy/regret comparisons, top feature importances, and the confusion matrix.
+
+### Platform Integration
+When running in Docker Compose (`worker-meta` on `q.meta`), registering an uploaded or built-in dataset enqueues `stl.metafeatures`, computing meta-features and serving the best-generator suggestion to `GET /datasets/{id}/suggestion` and the web UI's New Run page.
+
