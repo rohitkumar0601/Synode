@@ -12,6 +12,9 @@ class Settings:
     cors_origins: list[str]
     dispatch: str  # "celery" | "none"
     time_cap_seconds: float = 7200.0
+    # POST /runs/{id}/resume treats a running job whose status has not changed for this long
+    # as lost (default: the time cap + 600 s).
+    stall_seconds: float = 7800.0
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -25,6 +28,12 @@ class Settings:
             raise ValueError(f"STL_TIME_CAP_SECONDS must be a number: {e}") from e
         if not cap > 0 or cap == float("inf"):
             raise ValueError(f"STL_TIME_CAP_SECONDS must be positive and finite, got {cap}")
+        try:
+            stall = float(env("STL_STALL_SECONDS", str(cap + 600)))
+        except ValueError as e:
+            raise ValueError(f"STL_STALL_SECONDS must be a number: {e}") from e
+        if not stall > 0 or stall == float("inf"):
+            raise ValueError(f"STL_STALL_SECONDS must be positive and finite, got {stall}")
         origins = env("STL_CORS_ORIGINS", "http://localhost:3010")
         return cls(
             database_url=env("DATABASE_URL", "sqlite:///./outputs/api.db"),
@@ -33,6 +42,7 @@ class Settings:
             cors_origins=[o.strip() for o in origins.split(",") if o.strip()],
             dispatch=dispatch,
             time_cap_seconds=cap,
+            stall_seconds=stall,
         )
 
 

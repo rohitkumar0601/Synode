@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -173,3 +175,60 @@ def test_synthcity_privbayes_nominal_dp_audit():
     out = gen.sample(200)
     for col in ("x1", "age"):
         assert out[col].isin(set(train[col])).mean() == 1.0, col
+
+
+# --- S2b: budget profiles and generator_params -------------------------------------------
+
+def test_epochs_none_passes_no_n_iter(monkeypatch):
+    """Under budget=library the config gives epochs=None: synthcity must get no n_iter, so
+    the plugin's own default applies."""
+    from synthcity.plugins import Plugins
+
+    seen = {}
+
+    class _Stop(Exception):
+        pass
+
+    def fake_get(self, name, *args, **kwargs):
+        seen.update(name=name, kwargs=kwargs)
+        raise _Stop
+
+    monkeypatch.setattr(Plugins, "get", fake_get)
+    gen = load_generator("ctgan", seed=3, epochs=None)
+    with pytest.raises(_Stop):
+        gen.fit(_train(), MD)
+    assert seen["name"] == "ctgan"
+    assert seen["kwargs"] == {"random_state": 3}
+    assert "n_iter" not in gen._plugin_kwargs() and "epochs" not in gen._plugin_kwargs()
+    assert load_generator("ctgan", epochs=50)._plugin_kwargs()["n_iter"] == 50
+
+
+@pytest.mark.parametrize("name,n_iter", [("ctgan", 2000), ("tvae", 1000), ("tabddpm", 1000)])
+def test_resolved_params_library_profile_shows_library_defaults(name, n_iter):
+    rp = load_generator(name, seed=0, epochs=None).resolved_params()
+    assert rp["library"] == "synthcity" and rp["library_version"] == "0.2.12"
+    assert rp["params"]["n_iter"] == n_iter
+    assert rp["overrides"] == ["random_state"]
+    json.dumps(rp)
+
+
+@pytest.mark.parametrize("name", ["ctgan", "tvae"])
+def test_resolved_params_equal50_shows_override(name):
+    rp = load_generator(name, seed=0, epochs=50).resolved_params()
+    assert rp["params"]["n_iter"] == 50
+    assert rp["overrides"] == ["n_iter", "random_state"]
+    assert rp["params"]["batch_size"] == 200  # untouched library default
+
+
+def test_resolved_params_privbayes_lists_justified_overrides():
+    rp = load_generator("privbayes_eps1").resolved_params()
+    assert rp["params"]["K"] == 2 and rp["params"]["n_bins"] == 20
+    assert rp["params"]["mi_thresh"] == 0.01  # library default
+    assert rp["overrides"] == ["K", "epsilon", "n_bins", "random_state"]
+
+
+def test_resolved_params_bayesian_network_and_marginals():
+    rp = load_generator("bayesian_network").resolved_params()
+    assert rp["params"]["struct_learning_n_iter"] == 1000
+    assert rp["overrides"] == ["random_state"]
+    assert load_generator("marginals").resolved_params()["params"] == {"random_state": 0}

@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Main benchmark for one dataset: bash scripts/run_benchmark.sh DATASET [extra hydra overrides...]
+# Budget: profile `library` by default (each library's own epoch defaults, 86,400 s cap per job);
+# pass budget=equal50 (50 epochs, 7,200 s cap) or budget=smoke, e.g.
+#   bash scripts/run_benchmark.sh adult budget=equal50 seeds=[0]
 # A failed generate step does not stop the others; its exit code is recorded and summarised.
 set -euo pipefail
 DATASET="${1:?usage: run_benchmark.sh DATASET [-o-style overrides, e.g. seeds=[0]]}"

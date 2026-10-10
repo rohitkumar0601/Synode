@@ -148,7 +148,14 @@ def _register(store: ArtifactStore, session: Session, row: Dataset, df: pd.DataF
     return row
 
 
-def _enqueue_metafeatures(request: Request, dataset_id: str) -> None:
+def _enqueue_metafeatures(request: Request, store: ArtifactStore, dataset_id: str) -> None:
+    """After a (re-)registration: drop meta-features/suggestion computed from older data and
+    queue stl.metafeatures (q.meta). Failures are logged; registration still succeeds."""
+    try:
+        store.delete(keys.dataset_suggestion(dataset_id))
+        store.delete(keys.dataset_metafeatures(dataset_id))
+    except Exception:
+        log.exception("could not clear stale meta-features of dataset %s", dataset_id)
     try:
         request.app.state.dispatcher.enqueue_metafeatures(dataset_id)
     except Exception:
@@ -272,7 +279,7 @@ def builtin_dataset(name: str, request: Request, body: RegisterBody | None = Non
     row.registered = False
     row.metadata_json = md.model_dump_json()
     out = _out(_register(store, session, row, df, md, body.max_rows, public_info))
-    _enqueue_metafeatures(request, name)
+    _enqueue_metafeatures(request, store, name)
     if placeholder:
         warnings = _promote(session, row, imported_fp, "builtin")
         if warnings:
@@ -295,7 +302,7 @@ def register(dataset_id: str, request: Request, body: RegisterBody | None = None
     placeholder = row.source == "import"
     imported_fp = row.fingerprint if placeholder else None
     out = _out(_register(store, session, row, df, md, body.max_rows, public_info))
-    _enqueue_metafeatures(request, dataset_id)
+    _enqueue_metafeatures(request, store, dataset_id)
     if placeholder:
         warnings = _promote(session, row, imported_fp, "upload")
         if warnings:
@@ -303,14 +310,61 @@ def register(dataset_id: str, request: Request, body: RegisterBody | None = None
     return out
 
 
+def _unavailable(reason: str) -> dict:
+    return {"available": False, "reason": reason}
+
+
+def _read_suggestion(store: ArtifactStore, key: str) -> dict:
+    """The stored suggestion if it is well formed, else an 'unreadable' answer."""
+    try:
+        obj = json.loads(store.read_bytes(key))
+    except Exception:
+        log.warning("unreadable suggestion file %s", key, exc_info=True)
+        return _unavailable("stored suggestion is unreadable")
+    ok = isinstance(obj, dict) and isinstance(obj.get("available"), bool)
+    if ok and obj["available"]:
+        probs = obj.get("probabilities")
+        ok = (isinstance(obj.get("generator"), str) and isinstance(probs, dict)
+              and all(isinstance(p, int | float) for p in probs.values())
+              and isinstance(obj.get("model", {}), dict))
+    if not ok:
+        log.warning("malformed suggestion file %s", key)
+        return _unavailable("stored suggestion is unreadable")
+    return obj
+
+
+def _metafeature_error(store: ArtifactStore, dataset_id: str) -> str | None:
+    key = keys.dataset_metafeatures(dataset_id)
+    try:
+        if not store.exists(key):
+            return None
+        rec = json.loads(store.read_bytes(key))
+    except Exception:
+        return None
+    err = rec.get("error") if isinstance(rec, dict) else None
+    return str(err) if err else None
+
+
 @router.get("/{dataset_id}/suggestion")
 def get_suggestion(dataset_id: str, session: Session = Depends(get_session),
                    store: ArtifactStore = Depends(get_store)) -> dict:
-    _get(session, dataset_id)
+    """RQ3 best-generator suggestion (exploratory). 404 for an unknown dataset (as every
+    /datasets/{id} endpoint); otherwise always 200 with the stored
+    ``{"available": true, "generator", "probabilities", "model"}`` or
+    ``{"available": false, "reason"}`` (not registered, extraction failed, no predictor
+    trained, not computed yet, or an unreadable file)."""
+    row = _get(session, dataset_id)
+    if not row.registered:
+        return _unavailable("dataset is not registered")
     key = keys.dataset_suggestion(dataset_id)
-    if not store.exists(key):
-        return {"available": False, "reason": "suggestion has not been computed yet"}
-    return store.read_json(key)
+    if store.exists(key):
+        return _read_suggestion(store, key)
+    err = _metafeature_error(store, dataset_id)
+    if err:
+        return _unavailable(f"meta-feature extraction failed: {err}")
+    if not store.exists(keys.meta_predictor()):
+        return _unavailable("no meta-predictor has been trained yet (RQ3 meta-benchmark)")
+    return _unavailable("suggestion has not been computed yet")
 
 
 @router.get("")

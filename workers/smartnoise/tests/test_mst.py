@@ -251,3 +251,18 @@ def test_mst_log_scale_nan_fails_clearly():
     with pytest.raises(ValueError, match="NaN in log-scale column 'gain'"):
         _fit("mst_eps1", train=train, md=PUB_MD, public_bounds=PUB_BOUNDS,
              public_log_scale=["gain"])
+
+
+def test_mst_resolved_params():
+    import json
+
+    rp = load_generator("mst_eps1", seed=0,
+                        public_bounds={"age": [0, 100]}).resolved_params()
+    assert rp["library"] == "smartnoise-synth" and rp["library_version"]
+    assert rp["params"]["epsilon"] == 1.0
+    assert rp["params"]["delta"] == 1e-9  # library default
+    assert rp["params"]["fit"] == {"bins": 10, "preprocessor_share": 0.2,
+                                   "public_bounds": {"age": [0, 100]},
+                                   "public_log_scale": []}
+    assert rp["overrides"] == ["epsilon", "fit.transformer"]
+    json.dumps(rp)

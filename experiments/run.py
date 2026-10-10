@@ -7,7 +7,7 @@
   bash scripts/envrun.sh eval python experiments/run.py evaluate
   bash scripts/envrun.sh eval python experiments/run.py report --preset balanced
   bash scripts/envrun.sh meta python experiments/run.py metafeatures  # RQ3 meta-features
-  bash scripts/envrun.sh meta python experiments/run.py meta-eval      # RQ3 LODO + predictor
+  bash scripts/envrun.sh meta python experiments/run.py meta-eval      # RQ3 LODO [--train]
 
 Hydra overrides go before the subcommand:  -o datasets=adult -o seeds=[0] -o max_rows=2000
 """
@@ -100,7 +100,8 @@ def cmd_prepare(cfg: dict, args) -> int:
         ensure_splits(store, ds["name"], seed)
     jobs = plan_run(store, _run_id(cfg, args), ds["name"], cfg["generators_to_run"],
                     cfg["seeds"], params=cfg["generator_params"],
-                    time_cap_seconds=cfg["budget"]["time_cap_seconds"])
+                    time_cap_seconds=cfg["budget"]["time_cap_seconds"],
+                    budget_profile=cfg["budget"].get("profile"))
     print(f"registered {ds['name']} ({len(prepared)} rows); planned {len(jobs)} jobs "
           f"in run {_run_id(cfg, args)}")
     return 0
@@ -347,41 +348,52 @@ def cmd_metafeatures(cfg: dict, args) -> int:
 
 
 def cmd_meta_eval(cfg: dict, args) -> int:
-    """Build the RQ3 meta-dataset, run leave-one-dataset-out evaluation and train the final
-    suggestion model. Needs the meta env."""
+    """RQ3: build the meta-dataset from the frozen datasets YAML (runs <run-prefix>cc18_<id>),
+    run leave-one-dataset-out evaluation -> meta/lodo.json; with --train also fit the final
+    predictor -> meta/predictor.joblib + meta/predictor.json. Needs the meta env (exit 2
+    elsewhere). Exit 1 if --train was asked but there is too little data to train on."""
     try:
-        from stl_meta.meta import (
-            build_meta_dataset,
-            lodo_evaluate,
-            save_predictor,
-            train_final,
-            write_json,
-        )
+        from stl_meta import meta
     except ImportError as exc:
         print("error: the meta-eval stage runs in the meta env "
               f"(bash scripts/envrun.sh meta ...): {exc}", file=sys.stderr)
         return 2
     store = _store(cfg)
-    meta_df = build_meta_dataset(store, args.datasets_yaml)
-    summary = lodo_evaluate(meta_df)
-    write_json(store, keys.meta_lodo(), summary)
-    try:
-        artifact = train_final(meta_df)
-    except ValueError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
-    save_predictor(store, artifact, summary)
-    if args.json:
-        print(json.dumps(summary, indent=2))
-    else:
-        print(f"datasets={len(meta_df)} usable={len(summary['predictions'])} "
-              f"none={summary['n_none']}")
-        print(f"accuracy={summary['accuracy']} baseline={summary['baseline_accuracy']} "
-              f"mean_regret={summary['mean_regret']} "
-              f"baseline_mean_regret={summary['baseline_mean_regret']}")
+    meta_df = meta.build_meta_dataset(store, args.datasets_yaml, run_prefix=args.run_prefix)
+    summary = meta.lodo_evaluate(meta_df)
+    meta.write_json(store, keys.meta_lodo(), summary)
+
+    def num(v) -> str:
+        return "—" if v is None else f"{v:.3f}"
+
+    for e in summary["excluded"]:
+        print(f"excluded {e['dataset_id']}: {e['reason']}")
+    if summary["none_datasets"]:
+        print(f"no gate-passing generator (label none): {', '.join(summary['none_datasets'])}")
+    if summary["predictions"]:
+        print(f"{'dataset':<14}{'true':<24}{'predicted':<24}{'baseline':<24}"
+              f"{'regret':>8}{'base_regret':>12}")
         for p in summary["predictions"]:
-            print(f"{p['dataset_id']}: true={p['true']} pred={p['predicted']} "
-                  f"baseline={p['baseline']} regret={p['regret']}")
+            print(f"{p['dataset_id']:<14}{p['true']:<24}{p['predicted']:<24}"
+                  f"{p['baseline']:<24}{num(p['regret']):>8}{num(p['baseline_regret']):>12}")
+    print(f"datasets={summary['n_datasets']} labelled={summary['n_labelled']} "
+          f"none={summary['n_none']} excluded={len(summary['excluded'])}")
+    if summary["insufficient_data"]:
+        print(summary["reason"])
+    else:
+        print(f"{'':<10}{'accuracy':>10}{'bal_acc':>10}{'regret':>10}{'gate_fail':>10}")
+        for who, pre in (("model", ""), ("baseline", "baseline_")):
+            print(f"{who:<10}{num(summary[pre + 'accuracy']):>10}"
+                  f"{num(summary[pre + 'balanced_accuracy']):>10}"
+                  f"{num(summary[pre + 'mean_regret']):>10}"
+                  f"{summary[pre + 'n_gate_failing']:>10}")
+    print(f"wrote {keys.meta_lodo()}")
+    if args.train:
+        if summary["insufficient_data"]:
+            print("error: not training the predictor: " + summary["reason"], file=sys.stderr)
+            return 1
+        meta.save_artifact(store, meta.train_final(meta_df), summary)
+        print(f"wrote {keys.meta_predictor()} and {keys.meta_predictor_summary()}")
     return 0
 
 
@@ -420,7 +432,10 @@ def main(argv: list[str] | None = None) -> int:
     me = sub.add_parser("meta-eval", help="RQ3 LODO evaluation and predictor training "
                         "(meta env)")
     me.add_argument("--datasets-yaml", default=str(CONF_DIR / "meta" / "datasets.yaml"))
-    me.add_argument("--json", action="store_true")
+    me.add_argument("--run-prefix", default="meta-",
+                    help="run id of dataset cc18_<id> is <prefix>cc18_<id> (default meta-)")
+    me.add_argument("--train", action="store_true",
+                    help="also train and save the final predictor artifact")
     exp = sub.add_parser("export-results", help="bundle a run's results into a zip")
     exp.add_argument("--run", default=argparse.SUPPRESS, help="run id (also accepted globally)")
     exp.add_argument("--out", required=True)

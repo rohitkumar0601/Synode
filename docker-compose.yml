@@ -1,13 +1,19 @@
 # Synthetic Data Trust Lab — full local platform (spec §12).
 #   docker compose up -d --build --wait     # everything; web UI at http://localhost:3010
-# Backing services: postgres, redis, mlflow and a shared artifact volume. Platform: api, web
-# and one Celery worker per library env. Python images build from the repo root (incl.
-# third_party/ sources).
+# Backing services: postgres, redis, mlflow. Platform: api, web and one Celery worker per
+# library env. Python images build from the repo root (incl. third_party/ sources).
+# Object storage is NOT a container: MinIO runs natively on the host (README "Start MinIO");
+# containers reach it at host.docker.internal:9000 (override: STL_COMPOSE_S3_ENDPOINT_URL).
 # Dev-only credentials; host ports avoid 5432/3000/8000, which are taken on the dev machine.
 name: stl
 
 x-store-env: &store-env
-  STL_STORAGE_ROOT: /stl-store
+  # Own variable names (not STL_STORAGE_ROOT / S3_ENDPOINT_URL) so a host .env cannot leak
+  # host-only values (outputs/store, 127.0.0.1:9000) into the containers.
+  STL_STORAGE_ROOT: ${STL_COMPOSE_STORAGE_ROOT:-s3://stl-artifacts/store}
+  S3_ENDPOINT_URL: ${STL_COMPOSE_S3_ENDPOINT_URL:-http://host.docker.internal:9000}
+  AWS_ACCESS_KEY_ID: stl
+  AWS_SECRET_ACCESS_KEY: stl-dev-secret
   # DB 1: keeps compose queues apart from host-run workers that use the same Redis (DB 0).
   REDIS_URL: redis://redis:6379/1
 
@@ -23,7 +29,7 @@ x-worker: &worker
   depends_on:
     redis: {condition: service_healthy}
     mlflow: {condition: service_healthy}
-  volumes: [storedata:/stl-store]
+  extra_hosts: ["host.docker.internal:host-gateway"]
   healthcheck:
     # STL_WORKER is set in the image; the node name is <worker>@<container hostname>.
     test: ["CMD-SHELL", "celery -A stl_runner.celery_app inspect ping -d \"$$STL_WORKER@$$HOSTNAME\" --timeout 10 >/dev/null"]
@@ -46,17 +52,19 @@ services:
       interval: 5s
       retries: 10
 
+  # AOF persistence: queued Celery chains survive a Docker/redis restart.
   redis:
     image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
     ports: ["6379:6379"]
+    volumes: [redisdata:/data]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       retries: 10
 
-  # MLflow: sqlite backend and proxied artifacts on a local volume. Clients log via
-  # mlflow-artifacts:/, so workers do not need direct access to the MLflow artifact path.
-  # One worker:
+  # MLflow: sqlite backend on a volume; artifacts proxied (--serve-artifacts) to the host MinIO,
+  # so clients log via mlflow-artifacts:/ and need no S3 credentials for MLflow. One worker:
   # uvicorn's multi-worker supervisor kills slow-starting children under load (restart loop).
   mlflow:
     build: {context: ., dockerfile: docker/mlflow.Dockerfile}
@@ -64,8 +72,13 @@ services:
     command: >
       mlflow server --host 0.0.0.0 --port 5000 --workers 1
       --backend-store-uri sqlite:////mlflow/mlflow.db
-      --serve-artifacts --artifacts-destination /mlflow/artifacts
+      --serve-artifacts --artifacts-destination s3://stl-artifacts/mlflow
       --allowed-hosts mlflow,mlflow:5000,localhost,localhost:5000,127.0.0.1,127.0.0.1:5000
+    environment:
+      MLFLOW_S3_ENDPOINT_URL: ${STL_COMPOSE_S3_ENDPOINT_URL:-http://host.docker.internal:9000}
+      AWS_ACCESS_KEY_ID: stl
+      AWS_SECRET_ACCESS_KEY: stl-dev-secret
+    extra_hosts: ["host.docker.internal:host-gateway"]
     ports: ["5000:5000"]
     volumes: [mlflowdata:/mlflow]
     restart: unless-stopped
@@ -83,8 +96,9 @@ services:
       <<: *store-env
       DATABASE_URL: postgresql+psycopg://stl:stl@postgres:5432/stl
       STL_CORS_ORIGINS: http://localhost:${STL_WEB_PORT:-3010},http://127.0.0.1:${STL_WEB_PORT:-3010}
+      # Optional: STL_STALL_SECONDS (stalled-job threshold, see services/api settings)
     ports: ["${STL_API_PORT:-8010}:8000"]
-    volumes: [storedata:/stl-store]
+    extra_hosts: ["host.docker.internal:host-gateway"]
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
@@ -136,6 +150,20 @@ services:
       <<: *worker-env
       STL_CELERY_INCLUDE: stl_runner.tasks,stl_synthcity.tasks
 
+  # stl.metrics has its own queue so metrics never wait behind slow training on q.synthcity.
+  # Same image as worker-synthcity (identical build, so the second build is a cache hit).
+  worker-metrics:
+    <<: *worker
+    build:
+      <<: *worker-build
+      args: {WORKER: synthcity, PYTHON: "3.11"}
+    image: stl-worker-synthcity
+    command: celery -A stl_runner.celery_app worker -Q q.metrics --pool=prefork --concurrency=1 -n metrics@%h
+    environment:
+      <<: *worker-env
+      STL_WORKER: metrics  # healthcheck node name (the image sets synthcity)
+      STL_CELERY_INCLUDE: stl_runner.tasks,stl_synthcity.tasks
+
   worker-smartnoise:
     <<: *worker
     build:
@@ -175,5 +203,5 @@ services:
 
 volumes:
   pgdata:
-  storedata:
+  redisdata:
   mlflowdata:

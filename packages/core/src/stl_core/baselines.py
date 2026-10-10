@@ -5,11 +5,19 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from stl_core.generator import Generator
+from stl_core.generator import Generator, library_version
 from stl_core.metadata import ColumnType, TableMetadata
 
 
-class TrainCopy(Generator):
+class _Baseline(Generator):
+    """Our own baselines: no hyperparameters (library stl_core)."""
+
+    def resolved_params(self) -> dict:
+        return {"library": "stl_core", "library_version": library_version("stl-core"),
+                "params": {}, "overrides": []}
+
+
+class TrainCopy(_Baseline):
     """Returns real training rows. Perfect fidelity, worst privacy."""
 
     name = "train_copy"
@@ -24,7 +32,7 @@ class TrainCopy(Generator):
         )
 
 
-class IndependentMarginals(Generator):
+class IndependentMarginals(_Baseline):
     """Samples each column independently from its marginal distribution.
 
     Numerical columns use inverse-CDF interpolation between order statistics, so sampled

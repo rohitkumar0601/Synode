@@ -65,6 +65,12 @@ def status(run_id: str, job_id: str) -> str:
     return f"runs/{run_id}/{job_id}/status.json"
 
 
+def generator_params(run_id: str, job_id: str) -> str:
+    """The hyperparameters the generator's library was called with (Generator.
+    resolved_params plus the run's budget profile), written by generate_job before fit."""
+    return f"runs/{run_id}/{job_id}/generator_params.json"
+
+
 def privacy(run_id: str, job_id: str) -> str:
     """A DP generator's privacy_spent record (epsilon split and bounds path)."""
     return f"runs/{run_id}/{job_id}/privacy.json"
@@ -78,6 +84,11 @@ def synthcity_metrics(run_id: str, job_id: str) -> str:
     """synthcity metrics of a generated job, written by the `metrics` stage (synthcity env)
     and merged by evaluate; ``{"error": "..."}`` when they could not be computed."""
     return f"runs/{run_id}/{job_id}/synthcity_metrics.json"
+
+
+def cancel(run_id: str) -> str:
+    """Present while a run's cancellation is requested (stl_runner.control)."""
+    return f"runs/{run_id}/cancel.json"
 
 
 _COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")

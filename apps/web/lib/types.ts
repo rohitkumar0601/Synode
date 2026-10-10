@@ -29,17 +29,25 @@ export interface Dataset {
   preview?: Record<string, unknown>[];
 }
 
-export interface DatasetSuggestion {
-  available: boolean;
-  reason?: string;
-  generator?: string;
-  probabilities?: Record<string, number>;
+/** GET /datasets/{id}/suggestion: the exploratory RQ3 meta-model's best-generator guess. */
+export interface SuggestionAvailable {
+  available: true;
+  generator: string;
+  probabilities: Record<string, number>;
   model?: {
     n_datasets?: number;
     trained_at?: string;
     [key: string]: unknown;
   };
 }
+
+/** No suggestion: not registered, no predictor trained, not computed yet, extraction failed. */
+export interface SuggestionUnavailable {
+  available: false;
+  reason: string;
+}
+
+export type DatasetSuggestion = SuggestionAvailable | SuggestionUnavailable;
 
 /** A dataset whose metadata is complete (every dataset except an import placeholder). */
 export type DatasetWithMetadata = Dataset & { metadata: TableMetadata };

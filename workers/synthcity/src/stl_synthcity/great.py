@@ -11,7 +11,13 @@ import tempfile
 import numpy as np
 import pandas as pd
 import torch
-from stl_core.generator import Generator
+from stl_core.generator import (
+    Generator,
+    json_safe,
+    library_version,
+    resolve_params,
+    signature_defaults,
+)
 from stl_core.metadata import ColumnType, TableMetadata
 
 from stl_synthcity.generators import capture_train_stats, restore_types
@@ -29,13 +35,38 @@ class GReaTGenerator(Generator):
 
     name = "great"
 
-    def __init__(self, seed: int = 0, epochs: int = 50, llm: str = "distilgpt2",
-                 batch_size: int = 8, guided_sampling: bool = True, **params) -> None:
-        super().__init__(seed=seed, epochs=epochs, llm=llm, batch_size=batch_size,
-                         guided_sampling=guided_sampling, **params)
+    def __init__(self, seed: int = 0, epochs: int | None = None, llm: str = "distilgpt2",
+                 batch_size: int | None = None, guided_sampling: bool = True,
+                 **params) -> None:
+        """``epochs`` / ``batch_size`` None (budget profile `library`) are not passed, so
+        be-great's own defaults apply (epochs=100, batch_size=8: be_great/great.py:218-221).
+        ``llm`` is required by be-great; distilgpt2 is synthcity's default for its great
+        plugin (synthcity/plugins/generic/plugin_great.py:51-54)."""
+        given = {"epochs": epochs, "batch_size": batch_size}
+        super().__init__(seed=seed, llm=llm, guided_sampling=guided_sampling,
+                         **{k: v for k, v in given.items() if v is not None}, **params)
         self.epochs, self.llm, self.batch_size = epochs, llm, batch_size
         self.guided_sampling = guided_sampling
         self._tmp: tempfile.TemporaryDirectory | None = None
+
+    def _great_kwargs(self, experiment_dir: str = "<temporary directory>") -> dict:
+        """kwargs for be_great.GReaT(...). Checkpoints are never reloaded (we sample from the
+        in-memory model): save_strategy="no" (forwarded to TrainingArguments) keeps the
+        temp dir empty."""
+        kw = {"llm": self.llm, "experiment_dir": experiment_dir, "save_strategy": "no"}
+        kw.update({k: v for k, v in (("epochs", self.epochs), ("batch_size", self.batch_size))
+                   if v is not None})
+        return kw
+
+    def resolved_params(self) -> dict:
+        from be_great import GReaT
+
+        rp = resolve_params("be-great", library_version("be-great"), GReaT,
+                            self._great_kwargs())
+        sample = signature_defaults(GReaT.sample, skip=("n_samples", "device"))
+        rp["params"]["sample"] = json_safe({**sample, "guided_sampling": self.guided_sampling})
+        rp["overrides"] = sorted([*rp["overrides"], "sample.guided_sampling"])
+        return rp
 
     def _seed_all(self) -> None:
         np.random.seed(self.seed)
@@ -50,13 +81,10 @@ class GReaTGenerator(Generator):
         self._ids = [c for c in self._columns if metadata.columns.get(c) == ColumnType.id]
         self._cats = {c for c in self._columns if metadata.columns.get(c) == ColumnType.categorical}
         self._medians, self._cat_values = capture_train_stats(train_df, self._cats)
-        # Checkpoints are never reloaded (we sample from the in-memory model): save_strategy="no"
-        # (be-great forwards train kwargs to TrainingArguments) keeps the temp dir empty.
         if self._tmp is not None:
             self._tmp.cleanup()
         self._tmp = tempfile.TemporaryDirectory(prefix="stl-great-")
-        self._model = GReaT(llm=self.llm, epochs=self.epochs, batch_size=self.batch_size,
-                            experiment_dir=self._tmp.name, save_strategy="no")
+        self._model = GReaT(**self._great_kwargs(self._tmp.name))
         self._model.fit(train_df.drop(columns=self._ids))
 
     def sample(self, n: int) -> pd.DataFrame:

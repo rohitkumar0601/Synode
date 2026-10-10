@@ -7,16 +7,20 @@ import traceback
 from stl_core.schemas import JobSpec
 
 from stl_runner.celery_app import app
+from stl_runner.control import cancel_if_requested
 from stl_runner.pipeline import run_generate_with_cap, set_state
 from stl_runner.storage import store_from_env
 
 
 @app.task(name="stl.generate")
 def generate(job_json: str, allow_gpu_only: bool = False) -> str:
-    """Generate one job's synthetic table. Never raises, so the chain reaches evaluate."""
+    """Generate one job's synthetic table. Never raises, so the chain reaches evaluate.
+    A cancelled run's job is marked cancelled and skipped (the chain goes on harmlessly)."""
     store = store_from_env()
     job = JobSpec.model_validate_json(job_json)
     try:
+        if cancel_if_requested(store, job):
+            return job_json
         run_generate_with_cap(store, job, allow_gpu_only=allow_gpu_only)
     except Exception:
         set_state(store, job, "failed", traceback.format_exc())

@@ -2,14 +2,15 @@
 # Smoke run: Adult capped at 2,000 rows, one seed, the full CPU lineup across the sdv, synthcity and
 # smartnoise envs (MST epsilon sweep, plus the synthcity PrivBayes nominal-DP audit entries), then the
 # synthcity metrics stage.
-# Deep generators use few epochs. A failed stage does not stop the later ones; every stage's exit code
+# Budget profile `smoke` (5 epochs, 1,800 s cap; experiments/conf/budget/smoke.yaml).
+# A failed stage does not stop the later ones; every stage's exit code
 # is summarised on exit and the script exits with the worst one. SMOKE_RUN_ID picks the run (default adult-smoke).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 RUN_ID="${SMOKE_RUN_ID:-adult-smoke}"
 OPTS=(-o seeds=[0] -o max_rows=2000 -o "run_id=$RUN_ID" -o eval.n_attacks=300
-      -o eval.singling_out_mode=univariate -o budget.time_cap_seconds=1800 -o budget.epochs=5
+      -o eval.singling_out_mode=univariate -o budget=smoke
       -o "generators_to_run=[train_copy,independent_marginals,marginals,gaussian_copula,bayesian_network,ctgan,tvae,mst_eps0.1,mst_eps1,mst_eps10,privbayes_eps0.1,privbayes_eps1,privbayes_eps10]")
 declare -a SUMMARY=()
 WORST=0

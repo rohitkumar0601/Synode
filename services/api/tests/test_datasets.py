@@ -1,4 +1,6 @@
 import io
+import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -8,6 +10,8 @@ from sqlmodel import Session
 from stl_api import db
 from stl_api.main import create_app
 from stl_api.models import Run
+from stl_runner import keys
+from stl_runner.storage import store_from_env
 
 
 def make_df(n=100, rare=False):
@@ -197,24 +201,100 @@ def test_builtin_local_yaml(client, tmp_path, monkeypatch):
     assert client.app.state.dispatcher.meta_calls == ["adult"]
 
 
-def test_suggestion_endpoint(client):
-    from stl_runner import keys
-    from stl_runner.storage import store_from_env
+FIXTURES = Path(__file__).parent / "fixtures"
 
+
+def _registered(client):
     did = upload(client).json()["id"]
-    assert client.get(f"/datasets/{did}/suggestion").json() == {
-        "available": False,
-        "reason": "suggestion has not been computed yet",
-    }
-    store_from_env().write_json(keys.dataset_suggestion(did), {
-        "available": True,
-        "generator": "gaussian_copula",
-        "probabilities": {"gaussian_copula": 0.7, "mst_eps1": 0.3},
-        "model": {"n_datasets": 25, "trained_at": "2026-10-10T00:00:00+00:00"},
-    })
-    got = client.get(f"/datasets/{did}/suggestion").json()
-    assert got["available"] is True and got["generator"] == "gaussian_copula"
+    assert client.post(f"/datasets/{did}/register", json={}).status_code == 200
+    return did
+
+
+def _suggestion(client, did):
+    r = client.get(f"/datasets/{did}/suggestion")
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_suggestion_unknown_dataset_404(client):
     assert client.get("/datasets/nope/suggestion").status_code == 404
+
+
+def test_suggestion_unregistered_dataset(client):
+    did = upload(client).json()["id"]
+    assert _suggestion(client, did) == {"available": False,
+                                        "reason": "dataset is not registered"}
+
+
+def test_suggestion_from_fixture_file(client):
+    did = _registered(client)
+    store_from_env().write_bytes(keys.dataset_suggestion(did),
+                                 (FIXTURES / "suggestion.json").read_bytes())
+    got = _suggestion(client, did)
+    assert got == json.loads((FIXTURES / "suggestion.json").read_text())
+
+
+def test_suggestion_reasons_when_missing(client):
+    did = _registered(client)
+    store = store_from_env()
+    # no predictor, nothing computed yet
+    got = _suggestion(client, did)
+    assert got["available"] is False and "no meta-predictor" in got["reason"]
+    # a predictor exists but the worker has not run yet
+    store.write_bytes(keys.meta_predictor(), b"model")
+    got = _suggestion(client, did)
+    assert got["available"] is False and "not been computed yet" in got["reason"]
+    # extraction failed: the stored error is the reason
+    store.write_json(keys.dataset_metafeatures(did), {"error": "pymfe failed: boom"})
+    got = _suggestion(client, did)
+    assert got == {"available": False,
+                   "reason": "meta-feature extraction failed: pymfe failed: boom"}
+
+
+@pytest.mark.parametrize("content", [
+    b"{not json", b"[1, 2]", b'{"available": true}', b'{"available": "yes"}',
+    b'{"available": true, "generator": "ctgan", "probabilities": [0.5]}',
+    bytes([0xFF, 0xFE]),
+])
+def test_suggestion_corrupt_file_is_not_500(client, content):
+    did = _registered(client)
+    store_from_env().write_bytes(keys.dataset_suggestion(did), content)
+    assert _suggestion(client, did) == {"available": False,
+                                        "reason": "stored suggestion is unreadable"}
+
+
+def test_register_clears_stale_suggestion(client):
+    did = _registered(client)
+    store = store_from_env()
+    store.write_bytes(keys.dataset_suggestion(did), (FIXTURES / "suggestion.json").read_bytes())
+    store.write_json(keys.dataset_metafeatures(did), {"features": {"nr_inst": 1.0}})
+    assert client.post(f"/datasets/{did}/register", json={}).status_code == 200
+    assert not store.exists(keys.dataset_suggestion(did))
+    assert not store.exists(keys.dataset_metafeatures(did))
+    assert client.app.state.dispatcher.meta_calls == [did, did]
+
+
+class _BrokenDispatcher:
+    def enqueue(self, job, allow_gpu_only):
+        raise ConnectionError("redis down")
+
+    def enqueue_metafeatures(self, dataset_id):
+        raise ConnectionError("redis down")
+
+
+def test_enqueue_failure_is_not_fatal(client, tmp_path, monkeypatch, caplog):
+    client.app.state.dispatcher = _BrokenDispatcher()
+    did = upload(client).json()["id"]
+    r = client.post(f"/datasets/{did}/register", json={})
+    assert r.status_code == 200 and r.json()["registered"] is True
+    csv = tmp_path / "toy.csv"
+    make_df().to_csv(csv, index=False)
+    conf = tmp_path / "conf" / "datasets"
+    conf.mkdir(parents=True)
+    (conf / "adult.yaml").write_text(f"source: file\npath: {csv.as_posix()}\ntarget: y\n")
+    monkeypatch.setenv("STL_CONF_DIR", str(tmp_path / "conf"))
+    assert client.post("/datasets/builtin/adult", json={}).status_code == 201
+    assert caplog.text.count("could not enqueue meta-feature task") == 2
 
 
 @pytest.mark.network

@@ -23,3 +23,26 @@ def test_great_contract():
     # categories, so we only check the restored dtype here.
     assert out["c"].dtype == object
     assert not out.isna().any().any()
+
+
+def test_great_without_epochs_uses_be_great_default():
+    """Construct only (no download, no training): budget=library passes epochs=None."""
+    gen = load_generator("great", seed=0, epochs=None)
+    kw = gen._great_kwargs()
+    assert "epochs" not in kw and "batch_size" not in kw
+    rp = gen.resolved_params()
+    assert rp["library"] == "be-great" and rp["library_version"] == "0.0.14"
+    assert rp["params"]["epochs"] == 100 and rp["params"]["batch_size"] == 8
+    assert rp["params"]["llm"] == "distilgpt2"
+    assert rp["params"]["save_strategy"] == "no"
+    assert rp["params"]["sample"]["guided_sampling"] is True
+    assert rp["params"]["sample"]["temperature"] == 0.7  # be-great sample() default
+    assert rp["overrides"] == ["experiment_dir", "llm", "sample.guided_sampling",
+                               "save_strategy"]
+    assert "epochs" not in gen.params
+
+
+def test_great_epochs_override_is_recorded():
+    rp = load_generator("great", seed=0, epochs=5, batch_size=16).resolved_params()
+    assert rp["params"]["epochs"] == 5 and rp["params"]["batch_size"] == 16
+    assert {"epochs", "batch_size"} <= set(rp["overrides"])

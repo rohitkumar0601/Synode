@@ -36,6 +36,10 @@ class ArtifactStore:
         if self.fs.exists(path):
             self.fs.rm(path)
 
+    def modified(self, key: str) -> float:
+        """Last-modified time of a key as a POSIX timestamp."""
+        return self.fs.modified(self._path(key)).timestamp()
+
     def read_bytes(self, key: str) -> bytes:
         with self.fs.open(self._path(key), "rb") as f:
             return f.read()

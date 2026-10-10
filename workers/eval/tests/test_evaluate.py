@@ -298,3 +298,36 @@ def test_version_1_synthcity_file_key_is_read(toy, fresh):
     report = evaluate(JOB, Splits(train, control, test), fresh, md, None, CFG,
                       synthcity_metrics=v1)
     assert report.privacy.mia_domias_advantage == 0.7
+
+
+def test_report_carries_generator_params(tmp_path, toy):
+    train, control, test, md = toy
+    store = ArtifactStore(str(tmp_path))
+    register_dataset(store, "toy", pd.concat([train, control, test]), md)
+    ok, old = plan_run(store, "r1", "toy", ["independent_marginals", "train_copy"], [0],
+                       budget_profile="equal50")
+    generate_job(store, ok)
+    generate_job(store, old)
+    store.delete(keys.generator_params("r1", old.job_id))  # generated before S2b
+    report = evaluate_stored_job(store, ok, CFG)
+    assert report.status == "done"
+    assert report.generator_params == {
+        "library": "stl_core", "library_version": report.generator_params["library_version"],
+        "params": {}, "overrides": [], "profile": "equal50"}
+    stored = store.read_json(keys.report("r1", ok.job_id))
+    assert stored["generator_params"]["profile"] == "equal50"
+    assert evaluate_stored_job(store, old, CFG).generator_params is None
+
+
+def test_failed_report_carries_generator_params(tmp_path, toy):
+    train, control, test, md = toy
+    store = ArtifactStore(str(tmp_path))
+    register_dataset(store, "toy", pd.concat([train, control, test]), md)
+    (job,) = plan_run(store, "r1", "toy", ["train_copy"], [0], budget_profile="smoke")
+    gp = {"library": "x", "library_version": "1", "params": {}, "overrides": [],
+          "profile": "smoke"}
+    store.write_json(keys.generator_params("r1", job.job_id), gp)
+    from stl_runner.pipeline import set_state
+    set_state(store, job, "failed", "time cap of 1s exceeded")
+    report = evaluate_stored_job(store, job, CFG)
+    assert report.status == "failed" and report.generator_params == gp

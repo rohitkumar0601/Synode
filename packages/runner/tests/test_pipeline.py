@@ -256,3 +256,52 @@ def test_regeneration_drops_stale_metrics_and_report(tmp_path, runner):
     runner(store, job)
     assert job_state(store, job)["state"] == "generated"
     assert not any(store.exists(k) for k in stale)
+
+
+def test_plan_run_records_budget_profile(tmp_path):
+    store = _store(tmp_path)
+    plan_run(store, "r1", "toy", ["train_copy"], [0], budget_profile="equal50")
+    assert store.read_json(keys.run_manifest("r1"))["budget_profile"] == "equal50"
+    plan_run(store, "r2", "toy", ["train_copy"], [0])  # callers that predate profiles
+    manifest = store.read_json(keys.run_manifest("r2"))
+    assert manifest.get("budget_profile") is None
+    assert [j.job_id for j in load_jobs(store, "r2")] == ["train_copy__s0"]
+
+
+def test_plan_run_rejects_unknown_budget_profile(tmp_path):
+    store = _store(tmp_path)
+    with pytest.raises(ValueError, match="budget profile"):
+        plan_run(store, "r1", "toy", ["train_copy"], [0], budget_profile="fast")
+    assert not store.exists(keys.run_manifest("r1"))
+
+
+def test_generate_writes_generator_params(tmp_path):
+    store = _store(tmp_path)
+    (job,) = plan_run(store, "r1", "toy", ["train_copy"], [0], budget_profile="library")
+    generate_job(store, job)
+    gp = store.read_json(keys.generator_params("r1", job.job_id))
+    assert gp == {"library": "stl_core", "library_version": gp["library_version"],
+                  "params": {}, "overrides": [], "profile": "library"}
+    assert gp["library_version"]
+
+
+def test_generator_params_profile_is_none_for_old_manifests(tmp_path):
+    store = _store(tmp_path)
+    (job,) = plan_run(store, "r1", "toy", ["train_copy"], [0])
+    generate_job(store, job)
+    assert store.read_json(keys.generator_params("r1", job.job_id))["profile"] is None
+
+
+def test_generator_params_written_before_fit(tmp_path, monkeypatch):
+    """A job that fails (or is killed by the time cap) during fit still has its record."""
+    from stl_core.baselines import TrainCopy
+
+    def boom(self, *a):
+        raise RuntimeError("fit failed")
+
+    monkeypatch.setattr(TrainCopy, "fit", boom)
+    store = _store(tmp_path)
+    (job,) = plan_run(store, "r1", "toy", ["train_copy"], [0], budget_profile="smoke")
+    with pytest.raises(RuntimeError):
+        generate_job(store, job)
+    assert store.read_json(keys.generator_params("r1", job.job_id))["profile"] == "smoke"

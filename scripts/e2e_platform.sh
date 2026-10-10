@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # End-to-end platform check over HTTP: compose up (build + wait for health) -> upload a 1,000-row
 # toy CSV -> register -> POST /runs (5 generators across q.sdv / q.synthcity / q.smartnoise, then
-# metrics on q.synthcity and evaluate on q.eval) -> poll until done -> GET the report -> assert
+# metrics on q.metrics (q.synthcity before the run-control change) and evaluate on q.eval) -> poll until done -> GET the report -> assert
 # train_copy failed the gate and every job reported -> print the ranking -> check the web container.
 # Env: E2E_SKIP_UP=1 skips `docker compose up`; E2E_TIMEOUT_S (default 2700) bounds the poll;
 # STL_API_PORT / STL_WEB_PORT (default 8010 / 3010) are the compose host ports (also read by
-# docker-compose.yml; set STL_PUBLIC_API_URL=http://localhost:$STL_API_PORT to match the web build).
+# docker-compose.yml; set STL_PUBLIC_API_URL=http://localhost:$STL_API_PORT to match the web build);
+# E2E_UP_ARGS adds `docker compose up` flags (e.g. --no-recreate); STL_COMPOSE_STORAGE_ROOT picks
+# the containers' store prefix (default s3://stl-artifacts/store).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -17,9 +19,14 @@ mkdir -p "$WORK"
 py() { bash scripts/envrun.sh core python "$@"; }
 json() { py -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
 
+S3_HOST="${E2E_S3_URL:-http://127.0.0.1:9000}"  # host MinIO (README "Start MinIO")
+curl -fsS -o /dev/null "$S3_HOST/minio/health/live" \
+  || { echo "object store not reachable at $S3_HOST: start MinIO first (README)"; exit 1; }
 if [ "${E2E_SKIP_UP:-0}" != "1" ]; then
   echo "== docker compose up -d --build --wait"
-  docker compose up -d --build --wait
+  # shellcheck disable=SC2086  # E2E_UP_ARGS e.g. "--no-recreate" keeps running postgres/redis
+  docker compose up -d --build --wait ${E2E_UP_ARGS:-}
+  echo "== workers"; docker compose ps --format "{{.Service}}: {{.Status}}" | grep worker
 fi
 curl -fsS "$API/health"; echo
 

@@ -1,5 +1,6 @@
 # @package generator_params
-# Per-generator parameters. Deep generators share one epoch budget (equal-budget rule).
+# Per-generator parameters. Deep generators take their epoch count from the budget profile
+# (conf/budget/): null under `library` means the key is dropped and the library default applies.
 train_copy: {}
 independent_marginals: {}
 marginals: {}

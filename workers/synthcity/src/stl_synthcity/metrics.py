@@ -147,8 +147,10 @@ def compute_synthcity_metrics(train: pd.DataFrame, control: pd.DataFrame,
 
 def compute_stored_job(store, job, max_rows: int = 20_000) -> dict:
     """Compute a generated job's synthcity metrics and write them to
-    keys.synthcity_metrics; any failure is written as ``{"error": "..."}``."""
+    keys.synthcity_metrics; any failure is written as ``{"error": "..."}``. Nothing is
+    written if the run was cancelled meanwhile (stl_runner.control)."""
     from stl_runner import keys
+    from stl_runner.control import is_cancelled
     from stl_runner.pipeline import ensure_splits, load_metadata
 
     try:
@@ -159,5 +161,7 @@ def compute_stored_job(store, job, max_rows: int = 20_000) -> dict:
                                            job.seed, max_rows=max_rows)
     except Exception as exc:
         result = {"error": f"{type(exc).__name__}: {exc}"}
+    if is_cancelled(store, job.run_id):
+        return result
     store.write_json(keys.synthcity_metrics(job.run_id, job.job_id), result)
     return result

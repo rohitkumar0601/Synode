@@ -136,3 +136,14 @@ def test_both_mia_attacks_recorded_and_report_metrics_version():
     assert "metrics_version" not in flat and "privacy.metrics_version" not in flat
     assert MetricReport.model_validate_json(r.model_dump_json()).metrics_version == 2
     assert _report().metrics_version is None  # reports written before versioning
+
+
+def test_report_generator_params_is_optional():
+    old = _report().model_dump(mode="json")
+    old.pop("generator_params", None)
+    assert MetricReport.model_validate(old).generator_params is None  # pre-S2b report
+    gp = {"library": "synthcity", "library_version": "0.2.12", "params": {"n_iter": 2000},
+          "overrides": [], "profile": "library"}
+    back = MetricReport.model_validate(_report(generator_params=gp).model_dump(mode="json"))
+    assert back.generator_params == gp
+    assert not any(k.startswith("generator_params") for k in back.flat())

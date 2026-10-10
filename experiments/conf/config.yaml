@@ -1,6 +1,10 @@
 defaults:
   - datasets: adult
   - generators: default
+  # Training budget profile (conf/budget/): library = each library's own defaults (no epoch
+  # override), equal50 = 50 epochs for every deep generator (CPU), smoke = 5 epochs.
+  # Select with -o budget=equal50; fields stay overridable (-o budget.epochs=20).
+  - budget: library
   - _self_
 
 run_id: null
@@ -10,9 +14,6 @@ storage_root: outputs/store
 tracking_uri: sqlite:///outputs/mlflow.db
 generators_to_run: [train_copy, independent_marginals, marginals, gaussian_copula,
                     bayesian_network, ctgan, tvae, mst_eps0.1, mst_eps1, mst_eps10]
-budget:
-  epochs: 300
-  time_cap_seconds: 7200
 eval:
   n_attacks: 500
   singling_out_mode: multivariate

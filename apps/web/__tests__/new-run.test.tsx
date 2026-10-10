@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,7 +15,7 @@ vi.mock("next/navigation", () => ({
 
 import NewRunPage from "@/app/runs/new/page";
 import { generatorDescription, GENERATOR_INFO } from "@/lib/generator-info";
-import { GENERATORS } from "@/mocks/fixtures";
+import { GENERATORS, SUGGESTION_NO_PREDICTOR } from "@/mocks/fixtures";
 
 const API = "http://api.test";
 
@@ -165,18 +165,82 @@ describe("New run page", () => {
     });
   });
 
-  it("shows the exploratory generator suggestion and can select it", async () => {
+  it("shows the exploratory generator suggestion for the selected dataset", async () => {
+    nav.search = "dataset=adult";
+    renderPage();
+    const box = await screen.findByRole("status", { name: "Generator suggestion" });
+    expect(box).toHaveTextContent("Suggested: tvae (p=0.62) — exploratory, trained on 25 datasets");
+    // tvae is in the default CPU selection already
+    expect(within(box).getByText("Selected")).toBeInTheDocument();
+    expect(within(box).queryByRole("button", { name: "Use suggestion" })).not.toBeInTheDocument();
+  });
+
+  it("explains why the suggestion is exploratory", async () => {
+    const user = userEvent.setup();
+    nav.search = "dataset=adult";
+    renderPage();
+    await user.hover(await screen.findByRole("button", { name: "Why the suggestion is exploratory" }));
+    expect(await screen.findByText(/about 25 benchmark datasets/, {}, { timeout: 3000 })).toHaveTextContent(
+      /may well be wrong/,
+    );
+  });
+
+  it("'Use suggestion' adds the suggested generator and keeps the others", async () => {
     const user = userEvent.setup();
     const seen = captureRun();
     nav.search = "dataset=adult";
     renderPage();
-    await screen.findByLabelText("Dataset");
-    expect(await screen.findByText(/Suggested:/)).toHaveTextContent("tvae");
-    expect(screen.getByText("25 datasets")).toBeInTheDocument();
+    await screen.findByRole("status", { name: "Generator suggestion" });
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    await user.click(screen.getByRole("checkbox", { name: /^ctgan\b/ }));
     await user.click(screen.getByRole("button", { name: "Use suggestion" }));
+    expect(screen.getByRole("checkbox", { name: /^tvae\b/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /^ctgan\b/ })).toBeChecked();
+    expect(screen.queryByRole("button", { name: "Use suggestion" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Start benchmark" }));
     await waitFor(() => expect(nav.push).toHaveBeenCalled());
-    expect(seen.body?.generators).toEqual(["tvae"]);
+    expect(seen.body?.generators).toEqual(["ctgan", "tvae"]);
+  });
+
+  it("shows a subtle note, not an error, when no suggestion is available", async () => {
+    server.use(http.get(`${API}/datasets/:id/suggestion`, () => HttpResponse.json(SUGGESTION_NO_PREDICTOR)));
+    nav.search = "dataset=adult";
+    renderPage();
+    const note = await screen.findByText("No generator suggestion yet.");
+    expect(note).toHaveAttribute("title", SUGGESTION_NO_PREDICTOR.reason);
+    expect(screen.queryByText(/Suggested:/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("shows nothing when the suggestion request fails", async () => {
+    let calls = 0;
+    server.use(
+      http.get(`${API}/datasets/:id/suggestion`, () => {
+        calls += 1;
+        return HttpResponse.json({ detail: "boom" }, { status: 500 });
+      }),
+    );
+    nav.search = "dataset=adult";
+    renderPage();
+    await screen.findByLabelText("Dataset");
+    await waitFor(() => expect(calls).toBe(1));
+    expect(screen.queryByText(/Suggested:|No generator suggestion yet/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start benchmark" })).toBeEnabled();
+  });
+
+  it("does not ask for a suggestion before a dataset is chosen", async () => {
+    let calls = 0;
+    server.use(
+      http.get(`${API}/datasets/:id/suggestion`, () => {
+        calls += 1;
+        return HttpResponse.json(SUGGESTION_NO_PREDICTOR);
+      }),
+    );
+    renderPage();
+    await screen.findByLabelText("Dataset");
+    expect(calls).toBe(0);
+    expect(screen.queryByText(/Suggested:|No generator suggestion yet/)).not.toBeInTheDocument();
   });
 
   it("sends custom weights as a 3-array", async () => {

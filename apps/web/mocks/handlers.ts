@@ -11,6 +11,9 @@ import {
   GENERATORS,
   JOB_STATES,
   OOM_TRACEBACK,
+  SUGGESTION_AVAILABLE,
+  SUGGESTION_NO_PREDICTOR,
+  SUGGESTION_NOT_REGISTERED,
   aggregated,
   builtinDataset,
   candidatesFor,
@@ -248,15 +251,11 @@ export const handlers = [
   http.get("*/datasets/:id/suggestion", ({ params }) => {
     const d = findDataset(params.id);
     if (!d) return err(404, `dataset '${String(params.id)}' not found`);
-    const body: DatasetSuggestion =
-      d.id === "adult"
-        ? {
-            available: true,
-            generator: "tvae",
-            probabilities: { tvae: 0.62, gaussian_copula: 0.24, mst_eps1: 0.14 },
-            model: { n_datasets: 25, trained_at: "2026-10-10T00:00:00+00:00" },
-          }
-        : { available: false, reason: "suggestion has not been computed yet" };
+    const body: DatasetSuggestion = !d.registered
+      ? SUGGESTION_NOT_REGISTERED
+      : d.id === "adult"
+        ? SUGGESTION_AVAILABLE
+        : SUGGESTION_NO_PREDICTOR;
     return HttpResponse.json(body);
   }),
 

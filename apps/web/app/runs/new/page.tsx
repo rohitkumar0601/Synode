@@ -2,21 +2,21 @@
 
 import { toast } from "sonner";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, Info, Sparkles } from "lucide-react";
+import { AlertCircle, Info } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 import { ErrorState } from "@/components/error-state";
 import { defaultSelection, GeneratorPicker } from "@/components/generator-picker";
+import { GeneratorSuggestion } from "@/components/generator-suggestion";
 import { presetError, WeightsEditor, type PresetChoice } from "@/components/weights-editor";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ApiError, createRun, getSuggestion, listDatasets, listGenerators } from "@/lib/api";
+import { ApiError, createRun, listDatasets, listGenerators } from "@/lib/api";
 import type { Weights } from "@/lib/presets";
 import type { CreateRunBody } from "@/lib/types";
 
@@ -59,11 +59,6 @@ function NewRunForm() {
   const registered = (datasets.data ?? []).filter((d) => d.registered);
   const datasetId = datasetChoice ?? (preselect && registered.some((d) => d.id === preselect) ? preselect : "");
   const selected = selection ?? (generators.data ? defaultSelection(generators.data) : []);
-  const suggestion = useQuery({
-    queryKey: ["dataset-suggestion", datasetId],
-    queryFn: () => getSuggestion(datasetId),
-    enabled: !!datasetId,
-  });
 
   const run = useMutation({
     mutationFn: (body: CreateRunBody) => createRun(body),
@@ -100,12 +95,6 @@ function NewRunForm() {
     run.mutate(body);
   };
 
-  const suggested = suggestion.data?.available && suggestion.data.generator ? suggestion.data : null;
-  const suggestedProbability =
-    suggested?.generator && suggested.probabilities?.[suggested.generator] !== undefined
-      ? suggested.probabilities[suggested.generator]
-      : null;
-
   if (datasets.isError) return <ErrorState title="Could not load datasets" error={datasets.error} />;
   if (generators.isError) return <ErrorState title="Could not load generators" error={generators.error} />;
   if (datasets.isPending || generators.isPending) return <Skeleton className="h-64 w-full" />;
@@ -133,31 +122,12 @@ function NewRunForm() {
             .
           </p>
         )}
-        {suggested && (
-          <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-sm">
-            <Sparkles className="size-4 text-primary" aria-hidden="true" />
-            <span>
-              Suggested: <span className="font-mono">{suggested.generator}</span>
-              {suggestedProbability !== null ? ` (p=${suggestedProbability.toFixed(2)})` : ""}
-            </span>
-            {suggested.model?.n_datasets ? (
-              <Badge variant="outline">{suggested.model.n_datasets} datasets</Badge>
-            ) : null}
-            <Tooltip>
-              <TooltipTrigger
-                render={<button type="button" aria-label="Why the suggestion is exploratory" className="text-muted-foreground" />}
-              >
-                <Info className="size-4" aria-hidden="true" />
-              </TooltipTrigger>
-              <TooltipContent>
-                Exploratory RQ3 model; use it as a starting point, not a substitute for the benchmark.
-              </TooltipContent>
-            </Tooltip>
-            <Button type="button" variant="outline" size="sm" onClick={() => setSelection([suggested.generator!])}>
-              Use suggestion
-            </Button>
-          </div>
-        )}
+        <GeneratorSuggestion
+          datasetId={datasetId}
+          generators={generators.data}
+          selected={selected}
+          onChange={setSelection}
+        />
       </section>
 
       <section className="space-y-2">

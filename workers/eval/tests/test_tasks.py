@@ -91,3 +91,33 @@ def test_inference_secrets_whitespace_and_empties(monkeypatch):
     assert eval_config_from_env().inference_secrets == ["x1", "y"]
     monkeypatch.setenv("STL_EVAL_INFERENCE_SECRETS", " , ")
     assert eval_config_from_env().inference_secrets == "all"
+
+
+def test_cancelled_run_skips_evaluation(env):
+    from stl_runner.control import request_cancel
+
+    (job,) = plan_run(env, "r6", "toy", ["independent_marginals"], [0])
+    generate_job(env, job)
+    request_cancel(env, "r6")
+    assert _run(job) == "cancelled"
+    assert job_state(env, job)["state"] == "cancelled"
+    assert not env.exists(keys.report("r6", job.job_id))
+
+
+def test_cancel_during_evaluation_drops_report(env, monkeypatch):
+    from stl_eval import evaluate as ev
+    from stl_runner.control import request_cancel
+
+    (job,) = plan_run(env, "r7", "toy", ["independent_marginals"], [0])
+    generate_job(env, job)
+    real = ev.evaluate
+
+    def cancel_midway(*a, **k):
+        report = real(*a, **k)
+        request_cancel(env, "r7")
+        return report
+
+    monkeypatch.setattr(ev, "evaluate", cancel_midway)
+    assert _run(job) == "cancelled"
+    assert job_state(env, job)["state"] == "cancelled"
+    assert not env.exists(keys.report("r7", job.job_id))

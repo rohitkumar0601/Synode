@@ -1,0 +1,6 @@
+# @package budget
+# Equal budget on CPU: every deep generator trains 50 epochs (the old equal-budget rule).
+# Must agree with stl_core.budget.BUDGET_PROFILES.
+profile: equal50
+epochs: 50
+time_cap_seconds: 7200

@@ -12,7 +12,7 @@ import warnings
 import numpy as np
 import pandas as pd
 from stl_core.bounds import bound_value_problems
-from stl_core.generator import Generator
+from stl_core.generator import Generator, json_safe, library_version, resolve_params
 from stl_core.metadata import MISSING_CATEGORY, ColumnType, TableMetadata
 
 PREPROCESSOR_SHARE = 0.2  # epsilon share spent privately on bounds of non-public-bound columns
@@ -178,6 +178,23 @@ class MSTGenerator(Generator):
     def _seed_all(self) -> None:
         np.random.seed(self.seed)
         random.seed(self.seed)
+
+    def resolved_params(self) -> dict:
+        """Library defaults: MSTSynthesizer.__init__ (third_party/smartnoise-sdk/synth/snsynth/
+        mst/mst.py:39-41), with the catalog epsilon. ``fit`` records this wrapper's fit-time
+        choices: public bounds become BinTransformer constraints (``fit.transformer``) with
+        MST_BINS bins (smartnoise's cube default); PREPROCESSOR_SHARE of epsilon is spent
+        privately on bounds only for continuous columns without a public bound."""
+        from snsynth.mst import MSTSynthesizer
+
+        rp = resolve_params("smartnoise-synth", library_version("smartnoise-synth"),
+                            MSTSynthesizer, {"epsilon": float(self.params["epsilon"])})
+        rp["params"]["fit"] = json_safe({
+            "bins": MST_BINS, "preprocessor_share": PREPROCESSOR_SHARE,
+            "public_bounds": dict(self.params.get("public_bounds") or {}),
+            "public_log_scale": list(self.params.get("public_log_scale") or [])})
+        rp["overrides"] = sorted([*rp["overrides"], "fit.transformer"])
+        return rp
 
     def fit(self, train_df: pd.DataFrame, metadata: TableMetadata) -> None:
         from snsynth import Synthesizer

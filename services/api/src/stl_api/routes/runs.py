@@ -1,9 +1,20 @@
 # ruff: noqa: B008  (FastAPI Depends defaults)
-"""Run endpoints: create + dispatch, list/get with state refresh from the store, retry."""
+"""Run endpoints: create + dispatch, list/get with state refresh from the store, retry,
+cancel and resume.
+
+Cancel (POST /runs/{id}/cancel, 202) writes the run's cancel flag to the store and marks
+every unfinished job cancelled (finished results are kept); it is idempotent (a repeat, or a
+finished run, answers ``cancelled: 0``). Retry re-runs failed and cancelled jobs and clears
+the flag. Resume (POST /runs/{id}/resume) re-enqueues jobs whose Celery messages were lost
+(e.g. a broker restart): ``generated`` jobs get metrics -> evaluate, ``queued`` jobs the full
+chain, and jobs stuck in fitting/sampling/evaluating for longer than STL_STALL_SECONDS are
+treated as lost. Jobs whose messages are still in the broker are left alone.
+"""
 from __future__ import annotations
 
 import json
 import secrets
+import time
 from collections import Counter
 from datetime import UTC, datetime
 from typing import Annotated
@@ -16,16 +27,26 @@ from stl_core.catalog import CATALOG
 from stl_core.decision import resolve_weights
 from stl_core.schemas import JobSpec
 from stl_runner import keys
+from stl_runner.control import (
+    CANCEL_ERROR,
+    CANCELLED,
+    TERMINAL_STATES,
+    clear_cancel,
+    is_cancelled,
+    mark_cancelled,
+    request_cancel,
+)
 from stl_runner.pipeline import job_state, load_jobs, plan_run, set_state
 from stl_runner.storage import ArtifactStore
 
 from stl_api.deps import get_session, get_settings, get_store
-from stl_api.dispatch import Dispatcher
+from stl_api.dispatch import METRICS_QUEUE, Dispatcher
 from stl_api.models import Dataset, Job, Run
 from stl_api.settings import Settings
 
 router = APIRouter(prefix="/runs", tags=["runs"])
-TERMINAL = {"done", "failed"}
+TERMINAL = TERMINAL_STATES
+RUNNING = ("fitting", "sampling", "evaluating")
 
 
 def get_dispatcher(request: Request) -> Dispatcher:
@@ -99,6 +120,10 @@ def _refresh(session: Session, store: ArtifactStore, run: Run) -> tuple[list[Job
     if all(r.state in TERMINAL for r in rows):
         return rows, False
     stale, changed = False, False
+    try:
+        cancelled = is_cancelled(store, run.id)
+    except Exception:
+        cancelled, stale = False, True
     for row in rows:
         if row.state in TERMINAL:
             continue
@@ -108,6 +133,8 @@ def _refresh(session: Session, store: ArtifactStore, run: Run) -> tuple[list[Job
             stale = True
             continue
         state, error = st.get("state", "queued"), st.get("error")
+        if cancelled and state not in TERMINAL:  # a worker wrote after the cancel
+            state, error = CANCELLED, CANCEL_ERROR
         if (state, error) != (row.state, row.error):
             row.state, row.error = state, error
             row.updated_at = datetime.now(UTC)
@@ -124,7 +151,8 @@ def _summary(run: Run, jobs: list[Job], stale: bool) -> dict:
             "preset": run.preset,
             "weights": json.loads(run.weights_json) if run.preset == "custom" else None,
             "counts": dict(Counter(j.state for j in jobs)),
-            "done": bool(jobs) and all(j.state in TERMINAL for j in jobs), "stale": stale}
+            "done": bool(jobs) and all(j.state in TERMINAL for j in jobs), "stale": stale,
+            "cancelled": any(j.state == CANCELLED for j in jobs)}
 
 
 def _detail(run: Run, jobs: list[Job], stale: bool) -> dict:
@@ -231,7 +259,11 @@ def retry_run(run_id: str, body: RetryBody | None = None,
     if body is not None and body.allow_gpu_only is not None:
         allow = body.allow_gpu_only
     jobs, _ = _refresh(session, store, run)
-    failed = {j.job_id: j for j in jobs if j.state == "failed"}
+    try:
+        clear_cancel(store, run_id)  # a cancelled run can be retried
+    except Exception as e:
+        raise HTTPException(503, f"artifact store unavailable: {e}") from e
+    failed = {j.job_id: j for j in jobs if j.state in ("failed", CANCELLED)}
     if not failed:
         return {"run_id": run_id, "retried": []}
     try:
@@ -253,3 +285,91 @@ def retry_run(run_id: str, body: RetryBody | None = None,
             "detail": f"run {run_id}: no retried job could be dispatched: {pairs[0][1].error}",
             "run_id": run_id, "retried": retried})
     return {"run_id": run_id, "retried": retried}
+
+
+@router.post("/{run_id}/cancel", status_code=202)
+def cancel_run(run_id: str, session: Session = Depends(get_session),
+               store: ArtifactStore = Depends(get_store)) -> dict:
+    """Stop a run: queued jobs are skipped, running training is killed, finished results stay.
+    Idempotent: answers ``cancelled: 0`` when nothing was left to cancel."""
+    run = _get(session, run_id)
+    rows, _ = _refresh(session, store, run)
+    n = 0
+    try:
+        request_cancel(store, run_id)
+        for row in rows:
+            if row.state in TERMINAL:
+                continue
+            spec = _spec(run, row)
+            mark_cancelled(store, spec)  # keeps a job that finished in the meantime
+            st = job_state(store, spec)
+            row.state, row.error = st.get("state", CANCELLED), st.get("error")
+            row.updated_at = datetime.now(UTC)
+            session.add(row)
+            n += row.state == CANCELLED
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(503, f"artifact store unavailable: {e}") from e
+    session.commit()
+    return {"run_id": run_id, "cancelled": n}
+
+
+def _in_flight(waiting: set[tuple[str, str]]) -> bool:
+    """A job message is still in the broker. A stl.metrics message on another queue than
+    METRICS_QUEUE (enqueued before it existed) waits behind training, so it does not count."""
+    return any(task != "stl.metrics" or queue == METRICS_QUEUE for task, queue in waiting)
+
+
+@router.post("/{run_id}/resume", response_model=None)
+def resume_run(run_id: str, session: Session = Depends(get_session),
+               store: ArtifactStore = Depends(get_store),
+               dispatcher: Dispatcher = Depends(get_dispatcher),
+               settings: Settings = Depends(get_settings)) -> dict | JSONResponse:
+    """Re-enqueue jobs whose Celery messages were lost (see the module docstring)."""
+    run = _get(session, run_id)
+    rows, stale = _refresh(session, store, run)
+    if stale:
+        raise HTTPException(503, "artifact store unavailable: job states cannot be read")
+    if is_cancelled(store, run_id):
+        raise HTTPException(409, f"run {run_id} was cancelled; retry it to run the cancelled "
+                                 "jobs again")
+    open_ids = {r.job_id for r in rows if r.state not in TERMINAL}
+    if not open_ids:
+        return {"run_id": run_id, "resumed": []}
+    try:
+        specs = [s for s in load_jobs(store, run_id) if s.job_id in open_ids]
+    except Exception as e:
+        raise HTTPException(409, f"run {run_id} has no readable manifest: {e}") from e
+    pending_jobs = getattr(dispatcher, "pending_jobs", None)
+    try:
+        pending = (pending_jobs() if pending_jobs else None) or {}
+    except Exception:  # broker not inspectable: decide from the store states alone
+        pending = {}
+    now, plan = time.time(), []
+    for spec in specs:
+        if _in_flight(pending.get((run_id, spec.job_id), set())):
+            continue
+        state = job_state(store, spec)["state"]
+        if state in RUNNING:
+            age = now - store.modified(keys.status(run_id, spec.job_id))
+            if age < settings.stall_seconds:
+                continue
+        if state in ("generated", "evaluating"):
+            plan.append((spec, "eval"))
+        elif state in ("queued", "fitting", "sampling"):
+            plan.append((spec, "full"))
+    resumed, errors = [], []
+    for spec, kind in plan:
+        try:
+            if kind == "eval":
+                dispatcher.enqueue_eval(spec)
+            else:
+                dispatcher.enqueue(spec, run.allow_gpu_only)
+            resumed.append(spec.job_id)
+        except Exception as e:
+            errors.append(f"{type(e).__name__}: {e}")
+    if plan and not resumed:
+        return JSONResponse(status_code=503, content={
+            "detail": f"run {run_id}: no stalled job could be dispatched: {errors[0]}",
+            "run_id": run_id, "resumed": []})
+    return {"run_id": run_id, "resumed": resumed}

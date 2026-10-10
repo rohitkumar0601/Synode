@@ -1,0 +1,7 @@
+# @package budget
+# Library defaults (benchmark default): no epoch override, so each library trains with its
+# own defaults (synthcity ctgan n_iter=2000, tvae 1000, ddpm 1000; be-great epochs 100).
+# Must agree with stl_core.budget.BUDGET_PROFILES.
+profile: library
+epochs: null
+time_cap_seconds: 86400

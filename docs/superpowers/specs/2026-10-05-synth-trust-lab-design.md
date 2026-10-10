@@ -47,7 +47,7 @@ train-copy scores worst on privacy; independent marginals score worst on column-
    Validated in the dependency spike; any change is recorded in the image's README.
 5. **synthcity env uses Python 3.11** (3.10 resolves only synthcity 0.2.4).
 6. **GReaT via be-great directly** (synthcity's `great` plugin is broken with be-great 0.0.14).
-7. **Local platform storage uses a shared filesystem volume**. Optional S3-compatible storage remains in `packages/runner` for later deployment, but compose does not start MinIO/SeaweedFS by default.
+7. **Object storage: MinIO run natively on the host** (official MinIO container images are no longer publicly pullable); compose services reach it via host.docker.internal:9000; any S3-compatible endpoint works via S3_ENDPOINT_URL.
 8. **RQ2 ε sweep uses smartnoise-synth MST; synthcity PrivBayes retained as a nominal-DP audit**
    (not ε-DP: synthcity 0.2.12 `_encode` never bins numeric columns, so their domain is the exact
    training values and synthetic numerics are copies of them; its Laplace noise is scaled for

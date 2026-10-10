@@ -408,3 +408,55 @@ def test_report_warns_on_mixed_metric_versions(tmp_path, capsys, fake_synthcity)
     assert run.main([*args, "report"]) == 0
     assert ("warning: run toy-main mixes metric versions (None, 2): re-run metrics "
             "--recompute and evaluate") in capsys.readouterr().err
+
+
+DEEP = ("ctgan", "tvae", "tabddpm", "great")
+
+
+def test_default_budget_is_library_defaults():
+    cfg = run.load_config([])
+    assert cfg["budget"] == {"profile": "library", "epochs": None, "time_cap_seconds": 86400}
+    assert all(cfg["generator_params"][g] == {"epochs": None} for g in DEEP)
+
+
+@pytest.mark.parametrize("profile", ["library", "equal50", "smoke"])
+def test_budget_profiles_compose_and_match_core(profile):
+    from stl_core.budget import BUDGET_PROFILES
+
+    cfg = run.load_config([f"budget={profile}"])
+    assert cfg["budget"] == {"profile": profile, **BUDGET_PROFILES[profile]}
+    epochs = BUDGET_PROFILES[profile]["epochs"]
+    assert all(cfg["generator_params"][g] == {"epochs": epochs} for g in DEEP)
+
+
+def test_budget_profile_fields_can_still_be_overridden():
+    cfg = run.load_config(["budget=equal50", "budget.epochs=2", "budget.time_cap_seconds=60"])
+    assert cfg["budget"] == {"profile": "equal50", "epochs": 2, "time_cap_seconds": 60}
+    assert cfg["generator_params"]["ctgan"] == {"epochs": 2}
+
+
+def test_unknown_budget_profile_is_rejected():
+    from hydra.errors import MissingConfigException
+
+    with pytest.raises(MissingConfigException):
+        run.load_config(["budget=fast"])
+
+
+@pytest.mark.parametrize("profile", ["library", "smoke"])
+def test_prepare_records_budget_profile(tmp_path, profile):
+    args, st = _args(tmp_path, "train_copy", [f"budget={profile}",
+                                              "budget.time_cap_seconds=null"])
+    assert run.main([*args, "prepare"]) == 0
+    assert st.read_json(keys.run_manifest("toy-main"))["budget_profile"] == profile
+
+
+def test_generate_and_evaluate_record_generator_params(tmp_path, fake_synthcity):
+    args, st = _args(tmp_path, "independent_marginals",
+                     ["budget=smoke", "budget.time_cap_seconds=null", "eval.n_attacks=100",
+                      "eval.singling_out_mode=univariate", "eval.inference_secrets=target"])
+    for cmd in ("prepare", "generate", "metrics", "evaluate"):
+        assert run.main([*args, cmd]) == 0, cmd
+    gp = st.read_json(keys.generator_params("toy-main", "independent_marginals__s0"))
+    assert gp["library"] == "stl_core" and gp["profile"] == "smoke"
+    report = st.read_json(keys.report("toy-main", "independent_marginals__s0"))
+    assert report["generator_params"] == gp

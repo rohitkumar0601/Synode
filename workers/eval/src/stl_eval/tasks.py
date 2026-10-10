@@ -7,6 +7,7 @@ import os
 from stl_core.schemas import JobSpec
 from stl_runner import keys
 from stl_runner.celery_app import app
+from stl_runner.control import CANCELLED, cancel_if_requested
 from stl_runner.pipeline import job_state
 from stl_runner.storage import store_from_env
 from stl_runner.tracking import log_report
@@ -40,11 +41,15 @@ def evaluate(job_json: str) -> str:
     if job_state(store, job)["state"] == "done" and store.exists(keys.report(job.run_id,
                                                                             job.job_id)):
         return evaluate_stored_job(store, job).status  # idempotent redelivery
+    if cancel_if_requested(store, job):
+        return CANCELLED
     try:
         config = eval_config_from_env()
     except (ValueError, TypeError) as exc:
         report = fail_job(store, job, f"invalid eval config: {exc}")
     else:
         report = evaluate_stored_job(store, job, config)
+    if job_state(store, job)["state"] == CANCELLED:
+        return CANCELLED
     log_report(report, job)
     return report.status

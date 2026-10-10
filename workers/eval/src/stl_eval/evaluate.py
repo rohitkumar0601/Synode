@@ -24,6 +24,7 @@ from stl_core.schemas import (
 )
 from stl_core.split import Splits
 from stl_runner import keys
+from stl_runner.control import CANCELLED, is_cancelled, mark_cancelled
 from stl_runner.pipeline import ensure_splits, job_state, load_metadata, set_state
 from stl_runner.storage import ArtifactStore
 
@@ -201,7 +202,8 @@ def evaluate_stored_job(store: ArtifactStore, job: JobSpec,
     Idempotent: a job already "done" with a stored report returns that report unchanged.
     A job left in "evaluating" (process killed mid-evaluation) is evaluated again. On an
     interrupt (KeyboardInterrupt etc.) the job is marked failed/"interrupted", no report
-    is written, and the interrupt propagates.
+    is written, and the interrupt propagates. If the run is cancelled (stl_runner.control)
+    before the report is written, the job is marked cancelled and no report is stored.
     """
     state = job_state(store, job)
     report_key = keys.report(job.run_id, job.job_id)
@@ -232,6 +234,12 @@ def evaluate_stored_job(store: ArtifactStore, job: JobSpec,
         except BaseException:
             set_state(store, job, "failed", "interrupted")
             raise
+    gp_key = keys.generator_params(job.run_id, job.job_id)
+    if store.exists(gp_key):  # absent for jobs generated before S2b or never started
+        report.generator_params = store.read_json(gp_key)
+    if is_cancelled(store, job.run_id) or job_state(store, job)["state"] == CANCELLED:
+        mark_cancelled(store, job)  # cancelled meanwhile: no report
+        return report
     store.write_json(report_key, report)
     set_state(store, job, report.status, report.error)
     return report

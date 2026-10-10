@@ -6,6 +6,9 @@
 #                                      [--generators a,b,...] [--max-rows 5000]
 #   smoke: bash scripts/run_meta_benchmark.sh --limit 2 --seeds 0 --epochs 2
 #
+# Budget profile equal50 (50 epochs for every deep generator, 7,200 s cap): the meta-benchmark keeps
+# the equal budget for CPU comparability; --epochs N overrides the epoch count within that profile.
+#
 # Per dataset: prepare (eval) -> generate (sdv, synthcity, smartnoise, eval) -> metrics (synthcity)
 # -> evaluate (eval) -> report (eval) -> metafeatures (meta). Each stage logs to
 # outputs/meta_logs/<id>_<stage>.log. A failed stage never stops the loop (only a failed prepare
@@ -21,7 +24,7 @@ cd "$ROOT"
 LIMIT=0
 IDS=""
 SEEDS="0,1,2"
-EPOCHS=50
+EPOCHS=""  # empty: the equal50 profile's 50
 MAX_ROWS=5000
 GENERATORS="train_copy,independent_marginals,gaussian_copula,bayesian_network,ctgan,tvae,mst_eps1"
 while [ $# -gt 0 ]; do
@@ -32,7 +35,7 @@ while [ $# -gt 0 ]; do
     --epochs) EPOCHS="$2"; shift 2 ;;
     --generators) GENERATORS="$2"; shift 2 ;;
     --max-rows) MAX_ROWS="$2"; shift 2 ;;
-    -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -64,11 +67,6 @@ if [ "${#ROWS[@]}" -eq 0 ]; then echo "no datasets selected" >&2; exit 2; fi
 STAGES=(prepare gen_sdv gen_synthcity gen_smartnoise gen_eval metrics evaluate report metafeatures)
 declare -A RC=()
 ANY_FAILED=0
-{
-  echo "# MST bounds path per job (from runs/<run>/<job>/privacy.json), $(date -u +%FT%TZ)"
-  echo "# private = no public bounds, 0.2*eps spent on private bounds; none = no continuous columns"
-} > "$LOG_DIR/mst_bounds.txt"
-
 run_stage() {  # run_stage <id> <stage> <env> <subcommand...>: log, record exit code, never abort
   local id="$1" stage="$2" env="$3"; shift 3
   local rc=0 log="$LOG_DIR/${id}_${stage}.log"
@@ -84,9 +82,10 @@ for row in "${ROWS[@]}"; do
   RUN_ID="meta-cc18_$ID"
   OPTS=(-o datasets=openml_generic -o "dataset.name=cc18_$ID" -o dataset.source=openml
         -o "dataset.openml_id=$ID" -o "dataset.target=$TARGET" -o "run_id=$RUN_ID"
-        -o "seeds=[$SEEDS]" -o "max_rows=$MAX_ROWS" -o "budget.epochs=$EPOCHS"
+        -o "seeds=[$SEEDS]" -o "max_rows=$MAX_ROWS" -o budget=equal50
         -o "generators_to_run=[$GENERATORS]"
         -o eval.singling_out_mode=univariate -o eval.n_attacks=200 -o eval.min_attacks=100)
+  if [ -n "$EPOCHS" ]; then OPTS+=(-o "budget.epochs=$EPOCHS"); fi
   echo "=== cc18_$ID ($NAME, target $TARGET), run $RUN_ID ==="
   run_stage "$ID" prepare eval prepare
   if [ "${RC[$ID:prepare]}" -ne 0 ]; then  # OpenML downloads time out now and then: retry once
@@ -105,14 +104,28 @@ for row in "${ROWS[@]}"; do
   run_stage "$ID" evaluate eval evaluate
   run_stage "$ID" report eval report
   run_stage "$ID" metafeatures meta metafeatures
+done
+
+# MST bounds path of every meta run in the store (rebuilt each time, so resumed/partial runs stay listed)
+{
+  echo "# MST bounds path per job, from $STORE/runs/meta-cc18_*/<job>/privacy.json ($(date -u +%FT%TZ))"
+  echo "# private: no public bounds, 0.2*eps spent privately on bounds (preprocessor), 0.8*eps on MST;"
+  echo "# none: no continuous columns, all eps on MST; public/mixed would mean codebook bounds were used"
   shopt -s nullglob
-  for f in "$STORE/runs/$RUN_ID"/*/privacy.json; do
-    job="$(basename "$(dirname "$f")")"
-    bounds="$(grep -o '"bounds": *"[a-z]*"' "$f" | sed 's/.*"\([a-z]*\)"$/\1/' || true)"
-    echo "$RUN_ID $job bounds=${bounds:-?}" >> "$LOG_DIR/mst_bounds.txt"
+  for d in "$STORE"/runs/meta-cc18_*/mst_*/; do
+    d="${d%/}"; f="$d/privacy.json"
+    job="$(basename "$d")"; run="$(basename "$(dirname "$d")")"
+    field() { grep -o "\"$1\": *[^,}]*" "$f" | sed 's/^[^:]*: *//; s/"//g' || true; }
+    if [ -f "$f" ]; then
+      echo "$run $job bounds=$(field bounds) preprocessor_eps=$(field preprocessor) mst_eps=$(field synthesizer)"
+    else  # no privacy record: the job has not run, or failed (e.g. private bounds not found)
+      state="$(grep -o '"state": *"[a-z]*"' "$d/status.json" 2>/dev/null | sed 's/.*"\([a-z]*\)"$/\1/' || true)"
+      reason="$(grep -o 'MST could not privately infer bounds[^:]*' "$d/status.json" 2>/dev/null | head -1 || true)"
+      echo "$run $job bounds=? state=${state:-?}${reason:+ ($reason)}"
+    fi
   done
   shopt -u nullglob
-done
+} > "$LOG_DIR/mst_bounds.txt"
 
 echo
 printf '%-6s %-22s' id name

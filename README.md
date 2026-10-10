@@ -83,9 +83,19 @@ evaluate on the synthcity queue.
 
 ## Local Platform
 
-The local compose stack no longer starts MinIO or any S3-compatible localhost service by default.
-Artifacts are shared between the API and workers through the `storedata` Docker volume at
-`/stl-store`; host-run tools keep using `outputs/store`.
+Artifacts live in S3-compatible object storage. Official MinIO container images are no longer
+publicly pullable, so MinIO runs natively on the host and the compose services reach it at
+`host.docker.internal:9000` (any S3-compatible endpoint works: set `STL_COMPOSE_S3_ENDPOINT_URL`
+for compose, `S3_ENDPOINT_URL` for host-run processes).
+
+Start MinIO (once per boot; credentials must match `.env.example` / `docker-compose.yml`):
+
+```bash
+MINIO_ROOT_USER=stl MINIO_ROOT_PASSWORD=stl-dev-secret   minio server ~/minio-data --address :9000 --console-address :9001
+mc alias set stl http://127.0.0.1:9000 stl stl-dev-secret && mc mb --ignore-existing stl/stl-artifacts
+```
+
+Then start the platform and run the end-to-end check:
 
 ```bash
 docker compose up -d --build --wait
@@ -142,12 +152,20 @@ Compute meta-features for all registered datasets:
 bash scripts/envrun.sh meta python experiments/run.py metafeatures --all-registered
 ```
 
-Run LODO evaluation and train the final predictor:
+Run LODO evaluation, and train the final predictor with `--train`:
 ```bash
-bash scripts/envrun.sh meta python experiments/run.py meta-eval
+bash scripts/envrun.sh meta python experiments/run.py meta-eval            # LODO only
+bash scripts/envrun.sh meta python experiments/run.py meta-eval --train    # LODO + predictor
 ```
+Dataset `cc18_<id>` is read from run `meta-cc18_<id>`; use `--run-prefix <prefix>` for runs named
+`<prefix>cc18_<id>` (`--datasets-yaml` selects another frozen list). Datasets with missing/failed
+meta-features, no run, or an incomplete run (a planned job without a report) are excluded and
+listed with the reason. With fewer than 3 labelled datasets (or a single winner class) LODO reports
+`insufficient_data` and `--train` refuses to write a predictor (exit 1).
 Artifacts saved to `outputs/store/`:
-- `meta/lodo.json` — LODO accuracy, balanced accuracy, mean regret, and per-dataset predictions.
+- `meta/lodo.json` — LODO accuracy, balanced accuracy, mean regret (definition in `regret_definition`;
+  gate-failing picks counted in `n_gate_failing`), the same for the baseline, per-dataset predictions,
+  `none` and excluded datasets.
 - `meta/predictor.joblib` — Trained model bundle (RandomForest, feature list, training fold medians, labels).
 - `meta/predictor.json` — Metadata and feature list for inference.
 

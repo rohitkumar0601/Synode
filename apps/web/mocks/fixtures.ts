@@ -1,6 +1,8 @@
 import type {
   AggregatedReport,
   Dataset,
+  SuggestionAvailable,
+  SuggestionUnavailable,
   GeneratorInfo,
   JobState,
   RankedCandidate,
@@ -26,6 +28,24 @@ export const GENERATORS: GeneratorInfo[] = [
   { name: "privbayes_eps1", family: "nominal_dp_audit", queue: "q.synthcity", cpu_ok: true, params: { epsilon: 1.0 }, audit: true },
   { name: "privbayes_eps10", family: "nominal_dp_audit", queue: "q.synthcity", cpu_ok: true, params: { epsilon: 10.0 }, audit: true },
 ];
+
+/** GET /datasets/{id}/suggestion bodies (mirror services/api/tests/fixtures/suggestion.json). */
+export const SUGGESTION_AVAILABLE: SuggestionAvailable = {
+  available: true,
+  generator: "tvae",
+  probabilities: { tvae: 0.62, gaussian_copula: 0.24, mst_eps1: 0.14 },
+  model: { n_datasets: 25, n_none: 1, trained_at: "2026-10-10T00:00:00+00:00" },
+};
+
+export const SUGGESTION_NO_PREDICTOR: SuggestionUnavailable = {
+  available: false,
+  reason: "no meta-predictor has been trained yet (RQ3 meta-benchmark)",
+};
+
+export const SUGGESTION_NOT_REGISTERED: SuggestionUnavailable = {
+  available: false,
+  reason: "dataset is not registered",
+};
 
 export const BUILTINS = ["adult", "credit", "diabetes"] as const;
 

@@ -166,6 +166,11 @@ class MetricReport(BaseModel):
     fidelity: FidelityMetrics = Field(default_factory=FidelityMetrics)
     utility: UtilityMetrics = Field(default_factory=UtilityMetrics)
     privacy: PrivacyMetrics = Field(default_factory=PrivacyMetrics)
+    # The hyperparameters the generator's library was called with (runs/<run>/<job>/
+    # generator_params.json: library, library_version, params = signature defaults merged
+    # with what we passed, overrides, profile). None in reports written before S2b and for
+    # jobs that never got that far. Not a metric: kept out of flat().
+    generator_params: dict[str, Any] | None = None
 
     def flat(self) -> dict[str, float | None]:
         out: dict[str, float | None] = {}

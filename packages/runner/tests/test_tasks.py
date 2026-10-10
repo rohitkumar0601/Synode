@@ -42,7 +42,8 @@ def test_generate_matches_api_chain():
                     r'kwargs=\{"allow_gpu_only": allow_gpu_only\},\s*'
                     r'queue=CATALOG\[job\.generator\]\.queue,\s*immutable=True', src)
     met = re.search(r'signature\(\s*"stl\.metrics",\s*args=\[job_json\],\s*'
-                    r'queue="q\.synthcity",\s*immutable=True', src)
+                    r'queue=METRICS_QUEUE,\s*immutable=True', src)
+    assert re.search(r'^METRICS_QUEUE = "q\.metrics"$', src, re.M)
     ev = re.search(r'signature\(\s*"stl\.evaluate",\s*args=\[job_json\],\s*'
                    r'queue="q\.eval",\s*immutable=True', src)
     assert gen and met and ev
@@ -63,3 +64,13 @@ def test_generate_failure_does_not_escape(store):
     result = generate.apply(args=[job.model_dump_json()], kwargs={"allow_gpu_only": True})
     assert result.get() == job.model_dump_json()
     assert job_state(store, job)["state"] == "failed"
+
+
+def test_generate_short_circuits_cancelled_run(store):
+    from stl_runner.control import request_cancel
+
+    (job,) = plan_run(store, "r3", "toy", ["train_copy"], [0])
+    request_cancel(store, "r3")
+    assert generate.apply(args=[job.model_dump_json()]).get() == job.model_dump_json()
+    assert job_state(store, job)["state"] == "cancelled"
+    assert not store.exists(keys.synthetic("r3", job.job_id))

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import functools
 import random
 
 import numpy as np
 import pandas as pd
 import torch
 from loguru import logger
-from stl_core.generator import Generator
+from stl_core.generator import Generator, library_version, resolve_params
 from stl_core.metadata import MISSING_CATEGORY, ColumnType, TableMetadata
 
 # Single place for logging noise: this disables ALL loguru output from the "synthcity"
@@ -78,18 +79,35 @@ def restore_types(out: pd.DataFrame, columns: list[str], dtypes: dict, cats: set
     return out
 
 
+@functools.cache
+def _plugin_class(plugin: str) -> type:
+    from synthcity.plugins import Plugins
+    return Plugins().get_type(plugin)
+
+
 class SynthcityGenerator(Generator):
     def __init__(self, name: str, seed: int = 0, **params) -> None:
         super().__init__(seed=seed, **params)
         self.name = name
 
     def _plugin_kwargs(self) -> dict:
-        kw = dict(self.params)
+        """The kwargs passed to the synthcity plugin. None values are dropped so that the
+        plugin's own default applies (budget profile `library` sets epochs to None)."""
+        kw = {k: v for k, v in self.params.items() if v is not None}
         if PLUGINS[self.name] == "privbayes":
             kw = {**PRIVBAYES_DEFAULTS, **kw}
         if "epochs" in kw:
             kw["n_iter"] = kw.pop("epochs")
         return {"random_state": self.seed, **kw}
+
+    def resolved_params(self) -> dict:
+        # Library defaults = the plugin class's __init__ signature, e.g. CTGANPlugin
+        # n_iter=2000 (third_party/synthcity/src/synthcity/plugins/generic/plugin_ctgan.py:108),
+        # TVAEPlugin n_iter=1000 (plugin_tvae.py:96), TabDDPMPlugin n_iter=1000
+        # (plugin_ddpm.py:97). synthcity exposes no other defaults table (hyperparameter_space
+        # gives search ranges, not defaults).
+        return resolve_params("synthcity", library_version("synthcity"),
+                              _plugin_class(PLUGINS[self.name]), self._plugin_kwargs())
 
     def _seed_all(self) -> None:
         # Some plugins (e.g. marginal_distributions) draw from global RNGs.
