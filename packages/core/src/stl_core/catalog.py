@@ -32,8 +32,20 @@ _ENTRIES = [
     GeneratorInfo("bayesian_network", "graphical", "q.synthcity", _SC),
     GeneratorInfo("ctgan", "deep", "q.synthcity", _SC),
     GeneratorInfo("tvae", "deep", "q.synthcity", _SC),
+    # SDV's own CTGAN/TVAE (ctgan package) with SDV's shipped defaults (300 epochs, batch 500).
+    GeneratorInfo("sdv_ctgan", "deep", "q.sdv", "stl_sdv.generators"),
+    GeneratorInfo("sdv_tvae", "deep", "q.sdv", "stl_sdv.generators"),
     GeneratorInfo("tabddpm", "diffusion", "q.synthcity", _SC, cpu_ok=False),
     GeneratorInfo("great", "llm", "q.synthcity", _SC, cpu_ok=False),
+    # be-great on the tabular-pretrained tabularisai/Qwen3-0.3B-distil (HF Hub, Apache-2.0,
+    # 752 MB safetensors, 0.38B params; revision pinned in stl_synthcity.great). GPU path;
+    # README params batch_size=32, epochs=5, fp16 on CUDA.
+    GeneratorInfo("great_qwen", "llm", "q.synthcity", "stl_synthcity.great", cpu_ok=False),
+    # NVIDIA Safe-Synthesizer: QLoRA fine-tuning of base LLM (SmolLM3-3B). GPU only (Linux/A100).
+    GeneratorInfo("nss_smollm3", "llm", "q.safesynth", "stl_safesynth.generator", cpu_ok=False),
+    # NVIDIA Safe-Synthesizer DP variant via DP-SGD (Opacus, epsilon=8.0).
+    GeneratorInfo("nss_smollm3_dp_eps8", "llm_dp_sgd", "q.safesynth", "stl_safesynth.generator",
+                  cpu_ok=False, params={"epsilon": 8.0, "dp_enabled": True}),
     # RQ2 epsilon sweep: smartnoise-synth MST, a vetted epsilon-DP synthesizer.
     GeneratorInfo("mst_eps0.1", "differential_privacy", "q.smartnoise", _SN,
                   params={"epsilon": 0.1}),

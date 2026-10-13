@@ -55,6 +55,11 @@ train-copy scores worst on privacy; independent marginals score worst on column-
    MST (`smartnoise-synth==1.0.8`) runs in its own `smartnoise` worker env (Python 3.12, queue
    `q.smartnoise`): its dependencies conflict with the synthcity env's opacus pin. The catalog ε is
    the total budget; numeric bounds come from public codebooks (0 ε, see §7), so all of it fits MST.
+9. **Library-default hyperparameters replace the equal-budget rule** (owner decision 2026-10-10): each generator
+   trains with its upstream library's default hyperparameters (`budget_profile=library`, default time cap 86,400 s / 24 h);
+   the equal-budget rule survives as an explicit profile `equal50` (50 epochs, 7,200 s cap for CPU comparability)
+   and `smoke` (5 epochs, small rows). Pretrained base LLM weights are supported via library loaders (be-great
+   `tabularisai/Qwen3-0.3B-distil`, Safe-Synthesizer `HuggingFaceTB/SmolLM3-3B`).
 
 ## 3. Repository layout
 
@@ -123,6 +128,18 @@ path) and **celery** (web app; `generate` task routed to the owning queue, chain
 **Errors.** A generator failure or time-cap breach marks the job `failed` with traceback; the run
 continues. A metric that errors is `null`; a null privacy metric fails the gate.
 
+**Queues and run control.** The celery chain is generate (generator's queue) → `stl.metrics`
+(synthcity metrics, own queue `q.metrics` served by a synthcity-image worker, so metrics never
+wait behind hours of training on `q.synthcity`) → evaluate (`q.eval`). A run can be
+**cancelled**: `runs/{run}/cancel.json` is the flag; every task checks it at start and marks its
+job `cancelled` (terminal, like `done`/`failed`; finished results are kept), the generate stage
+polls it every 2 s and kills the training child process, and metrics/evaluate drop their output
+if it appears before they write. Retrying a run clears the flag and re-runs cancelled and failed
+jobs. **Resume** re-enqueues jobs whose messages were lost (broker restart): `generated` →
+metrics → evaluate, `queued` → full chain, fitting/sampling/evaluating only once their status is
+older than `STL_STALL_SECONDS` (default time cap + 600 s); jobs whose messages are still in the
+broker (queues or the redis `unacked` hash) are skipped.
+
 ## 6. Metrics and decision engine
 
 | Axis | Raw metrics |
@@ -188,8 +205,12 @@ candidate that failed the gate with the failing check.
 | gaussian_copula | q.sdv | SDV |
 | bayesian_network | q.synthcity | synthcity |
 | ctgan, tvae | q.synthcity | synthcity |
+| sdv_ctgan, sdv_tvae | q.sdv | SDV CTGAN / TVAE (shipped defaults: 300 epochs, batch 500) |
 | tabddpm | q.synthcity (GPU offline recommended) | synthcity `ddpm` |
-| great | q.synthcity (GPU offline recommended) | be-great `GReaT` directly (synthcity `great` plugin is broken) |
+| great | q.synthcity (GPU offline recommended) | be-great `GReaT` directly (distilgpt2 base) |
+| great_qwen | q.synthcity (GPU offline recommended) | be-great on pretrained `tabularisai/Qwen3-0.3B-distil` (Apache-2.0) |
+| nss_smollm3 | q.safesynth (GPU offline) | NVIDIA Safe-Synthesizer QLoRA fine-tuning (`HuggingFaceTB/SmolLM3-3B`, Apache-2.0) |
+| nss_smollm3_dp_eps8 | q.safesynth (GPU offline) | NVIDIA Safe-Synthesizer DP-SGD at ε=8.0 (`HuggingFaceTB/SmolLM3-3B`) |
 | mst_eps{0.1,1,10} | q.smartnoise | smartnoise-synth MST (ε-DP; RQ2 sweep) |
 | privbayes_eps{0.1,1,10} | q.synthcity | synthcity `privbayes` — nominal-DP audit only (not ε-DP, see §2 deviation 8) |
 
@@ -215,9 +236,10 @@ Tables: `Dataset`, `Run`, `Job`, `JobResult`. Endpoints:
 
 - `POST /datasets` (upload), `GET /datasets`, `GET /datasets/{id}`, `PUT /datasets/{id}/metadata`
 - `GET /generators` (registry: name, queue, cpu_ok)
-- `POST /runs` (dataset, generators, seeds, preset/weights), `GET /runs`, `GET /runs/{id}` (status + per-job progress)
-- `GET /runs/{id}/report?preset=…&weights=…` (aggregated + Pareto + recommendation; recomputed, so presets switch live)
-- `GET /datasets/{id}/predict` (RQ3 meta-predictor hint)
+- `POST /runs` (dataset, generators, seeds, preset/weights, optional `budget_profile` ∈ `library`/`equal50`/`smoke`, 422 otherwise; default setting `STL_BUDGET_PROFILE`, itself default `library`), `GET /runs`, `GET /runs/{id}` (status + per-job progress; both echo `budget_profile`, null for runs created before it). The profile's epochs go to the epoch-taking generators (none under `library`; explicit `params` win) and its time cap applies per job unless `STL_TIME_CAP_SECONDS` is set, which overrides every profile; the run manifest and `Run.budget_profile` record it
+- `POST /runs/{id}/retry` (failed + cancelled jobs), `POST /runs/{id}/cancel` (202, idempotent: `{run_id, cancelled: n}`), `POST /runs/{id}/resume` (`{run_id, resumed: [job ids]}`; 409 for a cancelled run, 503 if nothing could be dispatched); run summaries carry `cancelled: bool`
+- `GET /runs/{id}/report?preset=…&weights=…` (aggregated + Pareto + recommendation; recomputed, so presets switch live); each `per_job` entry carries `generator_params` (from report.json, else the job's `generator_params.json` written before fit, else null)
+- `GET /datasets/{id}/suggestion` (RQ3 meta-predictor hint: the stored `suggestion.json`, or `{"available": false, "reason": …}`; 404 for an unknown dataset; classification datasets only). `POST /datasets/{id}/suggestion/refresh` re-enqueues it (202; 404 unknown, 409 not registered, 503 dispatch failure). Register/builtin enqueue `stl.metafeatures` on `q.meta`.
 - `POST /schema-runs`, `GET /schema-runs/{id}` (Data Designer track)
 - `POST /internal/jobs/{id}` (worker status/result callback, shared-token auth)
 - `POST /import-results` (bundle upload)
@@ -225,24 +247,78 @@ Tables: `Dataset`, `Run`, `Job`, `JobResult`. Endpoints:
 ## 9. Web app (`apps/web`)
 
 Pages: Datasets (upload, metadata editor), New run (generator picker with predicted-best hint,
-seeds, preset), Run detail (live job progress, scorecard table mean ± std, 2D/3D Pareto plot,
+seeds, preset, training budget profile with a cost hint), Run detail (budget-profile chip; live job
+progress with a per-job "Parameters" disclosure: library + version, profile, overrides highlighted,
+full resolved params; scorecard table mean ± std, 2D/3D Pareto plot,
 preset switcher/custom weights, recommendation card with reason, gate failures), Schema mode
 (define columns/samplers/rules, generate, rule-validity score).
 
 ## 10. RQ3 (`workers/meta`)
 
-Pull 25 small OpenML-CC18 classification datasets (`experiments/conf/meta/datasets.yaml`);
-run fast generators (`independent_marginals`, `gaussian_copula`, `bayesian_network`, `ctgan`,
-`tvae`, `mst_eps1` + `train_copy` sanity ceiling) × 3 seeds with budget cap (50 epochs, 5,000 rows);
-label each dataset's winner by Balanced score among gate-passing candidates (datasets with no
-gate-passing candidate labelled `none` and reported, excluded from accuracy); extract `pymfe`
-meta-features (groups `general`, `statistical`, `info-theory`, summary `mean` and `sd`) on the
-seed-0 TRAIN split; train a `RandomForestClassifier(n_estimators=300, random_state=0, class_weight="balanced")`;
-evaluate via leave-one-dataset-out (LODO) cross-validation with train-fold imputation and baseline
-"always predict majority winner in training folds", recording accuracy, balanced accuracy, and mean regret.
-Exploratory framing: reported honestly even if sample size yields modest raw accuracy vs baseline.
-Serialised predictor (`meta/predictor.joblib` and `meta/predictor.json`) is served by `worker-meta`
-on queue `q.meta` (`stl.metafeatures` Celery task) for `GET /datasets/{id}/suggestion` and the web UI.
+RQ3 — *can a meta-model predict the best generator from a dataset's profile alone?* — is
+**exploratory**: with ~25 datasets a meta-model that does not beat the majority baseline is a valid
+result and is reported as such; nothing is tuned on the held-out dataset.
+
+**Datasets.** OpenML-CC18 (suite 99) classification tasks with 500 ≤ instances ≤ 20,000, ≤ 60
+features, ≤ 20 classes and every class ≥ 5 rows after a 60/20/20 split (checked conservatively as
+minority class ≥ 25 rows); the first 25 by OpenML id are frozen in
+`experiments/conf/meta/datasets.yaml` together with every excluded task and its reason (too many
+features/classes/instances, or beyond the cap of 25). Datasets are registered as `cc18_<id>` with
+`datasets=openml_generic` (no public bounds).
+
+**Benchmark.** `scripts/run_meta_benchmark.sh`, one run `meta-cc18_<id>` per dataset: generators
+`independent_marginals, gaussian_copula, bayesian_network, ctgan, tvae, mst_eps1` + `train_copy`
+(sanity ceiling, never a candidate or label); budget profile `equal50` (50 epochs for the deep
+generators, 7,200 s cap per job; the meta-benchmark keeps the equal budget independent of the main
+benchmark's library-defaults mode), `max_rows=5000`, seeds 0,1,2, eval
+`singling_out_mode=univariate`, `n_attacks=200`, `min_attacks=100`. Stages prepare → generate →
+metrics → evaluate → report → metafeatures; a failed stage never stops the loop.
+
+**Labels.** Per dataset `recommend(aggregate(reports), "balanced")` over the run's reports with
+`train_copy` dropped: the gate-passing candidate with the highest balanced score, seeds aggregated.
+No gate-passing candidate → label `none`: kept and reported, excluded from training and accuracy
+(`n_none`). A dataset with missing/failed meta-features, no run, or an incomplete run (a planned job
+without a report) is **excluded** with its reason and never labelled `none`. A generator whose
+seeds all failed is not a candidate on that dataset.
+
+**Meta-features.** `pymfe` 0.4.4 groups `general`, `statistical`, `info-theory`, summaries `mean`
+and `sd`, on the registered (prepared, capped) seed-0 TRAIN split with the target; per-feature
+failures → NaN, total failure → recorded error (dataset excluded).
+
+**Evaluation.** Leave-one-dataset-out over the labelled datasets: for each held-out dataset the
+imputation medians (non-finite → NaN → training-fold median), the meta-model
+`RandomForestClassifier(n_estimators=300, random_state=0, class_weight="balanced")` and the baseline
+("always predict the most frequent winner of the training folds", ties alphabetical) are fitted on
+the other datasets only. Metrics for model and baseline: accuracy, balanced accuracy, mean regret and
+`n_gate_failing`. **Regret** of predicting `g`: with P the generators that passed the gate with a
+finite balanced score, `max(P) − score(g)` if `g ∈ P`, else `max(P) − min(P)` (a gate-failing or
+unscored pick costs as much as the worst acceptable pick); because that penalty is 0 when |P| = 1,
+`n_gate_failing` counts gate-failing picks separately. Fewer than 3 labelled datasets or a single
+winner class → `insufficient_data` (no metrics, no predictor). `experiments/run.py meta-eval` writes
+`meta/lodo.json`; `--train` also fits the final model on all labelled datasets →
+`meta/predictor.joblib` (model, features, medians, labels, metadata) + `meta/predictor.json`.
+`notebooks/rq3_meta.ipynb` reports the dataset table, metrics vs baseline, per-dataset predictions,
+confusion matrix, feature importances and label distribution.
+
+**Serving.** `worker-meta` (queue `q.meta`, task `stl.metafeatures`) computes meta-features of a
+newly registered classification dataset (≤ 5,000-row sample; pymfe in a child process terminated
+after 300 s, Celery hard limit 360 s) and, if a predictor exists, writes
+`datasets/<id>/suggestion.json`; a non-classification dataset skips pymfe and gets
+`{"available": false, "reason": "RQ3 predictor covers classification datasets only"}`.
+`GET /datasets/{id}/suggestion` returns it or `{"available": false, "reason"}`; the web New-run
+page shows it as an exploratory hint. Suggestions are computed at registration; after retraining,
+refresh with `POST /datasets/{id}/suggestion/refresh` (or the page's "Refresh suggestion" link).
+
+**Threats to validity.** (1) At most 25 datasets (fewer after `none`/exclusions): LODO estimates
+have high variance (one dataset ≈ 4 accuracy points) and no significance claim is made. (2) MST
+private-bounds fallback: without public bounds MST spends 0.2·ε on privately inferred bounds of
+continuous columns, which fails on small numeric datasets (e.g. diabetes, 461 TRAIN rows); there
+`mst_eps1` is not a candidate, so labels are conditional on it and biased against MST on small
+numeric tables — the number of affected datasets is reported (`outputs/meta_logs/mst_bounds.txt`,
+notebook). Data-derived "public" bounds were rejected because they would void the DP claim.
+(3) DOMIAS is not applicable on all-categorical datasets (ids 3, 11, 46, 50, 469); the gate's
+membership-inference check there uses the distance-based MIA only. (4) Labels depend on the fixed
+CPU budget (`equal50`) and the `balanced` preset weights.
 
 
 ## 11. Data Designer track

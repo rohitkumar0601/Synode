@@ -34,3 +34,17 @@ bash scripts/envrun.sh eval python experiments/run.py -o datasets=adult import-r
 ```
 
 The dataset must be registered locally with the same `max_rows` as in the notebook run (the import checks a dataset fingerprint; `--force` overrides). Imported jobs then appear in run `<dataset>-gpu` for `report`.
+
+# RQ3 report notebook
+
+`rq3_meta.ipynb` is the RQ3 (meta-predictor) report. It reads `meta/lodo.json` and the predictor
+(`meta/predictor.joblib`) from the artifact store (`STL_STORAGE_ROOT`, default `outputs/store`; editable in
+its first cell), the `meta-cc18_*` runs, `experiments/conf/meta/datasets.yaml` and
+`outputs/meta_logs/mst_bounds.txt`, and explains instead of plotting when the data are insufficient (e.g. the
+2-dataset smoke run). Run it in the meta env (matplotlib/nbconvert/ipykernel are in its dev group):
+
+```bash
+bash scripts/envrun.sh meta python -m jupyter nbconvert --to notebook --execute --output-dir outputs/notebooks --output rq3_meta_executed.ipynb notebooks/rq3_meta.ipynb
+```
+
+Commit the notebook without outputs; see the README "RQ3" section for producing its inputs.

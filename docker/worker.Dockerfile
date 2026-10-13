@@ -9,7 +9,7 @@ ARG PYTHON=3.12
 
 FROM ghcr.io/astral-sh/uv:python${PYTHON}-bookworm-slim AS build
 ARG WORKER
-ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never \
+ENV UV_COMPILE_BYTECODE=0 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never \
     UV_PROJECT_ENVIRONMENT=/opt/venv UV_HTTP_TIMEOUT=300 UV_HTTP_RETRIES=5 UV_CONCURRENT_DOWNLOADS=4
 WORKDIR /src
 COPY docker/uv_sync_cpu.py /usr/local/bin/uv_sync_cpu.py

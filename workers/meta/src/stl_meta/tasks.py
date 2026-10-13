@@ -13,15 +13,23 @@ from stl_meta.meta import load_predictor, predict_features, write_json
 
 log = logging.getLogger(__name__)
 
+DEFAULT_TIMEOUT_S = 300.0
+CLASSIFICATION_ONLY = "RQ3 predictor covers classification datasets only"
 
-@app.task(name="stl.metafeatures")
-def metafeatures(dataset_id: str, max_rows: int = 5000, timeout_s: float = 300.0) -> str:
-    """Meta-features of a registered dataset (sampled to ``max_rows``, pymfe given up after
-    ``timeout_s``) -> ``datasets/<id>/metafeatures.json`` (an ``error`` record if
-    extraction fails). Only when ``meta/predictor.joblib`` exists is
+
+# time_limit: hard backstop (the pymfe child is already terminated after timeout_s);
+# Celery replaces the worker child if the task overruns it.
+@app.task(name="stl.metafeatures", time_limit=int(DEFAULT_TIMEOUT_S) + 60)
+def metafeatures(dataset_id: str, max_rows: int = 5000,
+                 timeout_s: float = DEFAULT_TIMEOUT_S) -> str:
+    """Meta-features of a registered dataset (sampled to ``max_rows``; the pymfe child
+    process is terminated after ``timeout_s``) -> ``datasets/<id>/metafeatures.json`` (an
+    ``error`` record if extraction fails). Only when ``meta/predictor.joblib`` exists is
     ``datasets/<id>/suggestion.json`` written (``available: true``); otherwise any stale
-    suggestion is removed and the API reports why none is available. Never raises: the
-    task is fire-and-forget after registration."""
+    suggestion is removed and the API reports why none is available. A non-classification
+    dataset is not given to pymfe; its suggestion is ``{"available": false, "reason":
+    CLASSIFICATION_ONLY}``. Never raises: the task is fire-and-forget after
+    registration."""
     try:
         out_key = keys.dataset_suggestion(keys.validate_component(dataset_id, "dataset id"))
     except Exception:
@@ -32,6 +40,9 @@ def metafeatures(dataset_id: str, max_rows: int = 5000, timeout_s: float = 300.0
         store.delete(out_key)  # never leave a suggestion computed from older data
         rec = compute_for_dataset(store, dataset_id, seed=0, max_rows=max_rows,
                                   timeout_s=timeout_s)
+        if "skipped" in rec:
+            write_json(store, out_key, {"available": False, "reason": CLASSIFICATION_ONLY})
+            return dataset_id
         artifact = load_predictor(store)
         if artifact is None:
             log.info("stl.metafeatures %s: no predictor trained yet; no suggestion", dataset_id)

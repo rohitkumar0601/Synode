@@ -13,7 +13,7 @@
 # -> evaluate (eval) -> report (eval) -> metafeatures (meta). Each stage logs to
 # outputs/meta_logs/<id>_<stage>.log. A failed stage never stops the loop (only a failed prepare
 # skips that dataset's later stages); a summary table of exit codes is printed at the end and the
-# script exits 1 if any stage failed.
+# script exits 1 if any stage's final exit code (after the prepare retry) is non-zero.
 # The datasets use datasets=openml_generic (no public bounds), so MST takes its documented private-bounds
 # fallback (0.2*epsilon on bounds of continuous columns); the bounds path of every MST job
 # (runs/<run>/<job>/privacy.json) is collected into outputs/meta_logs/mst_bounds.txt.
@@ -66,14 +66,13 @@ if [ "${#ROWS[@]}" -eq 0 ]; then echo "no datasets selected" >&2; exit 2; fi
 
 STAGES=(prepare gen_sdv gen_synthcity gen_smartnoise gen_eval metrics evaluate report metafeatures)
 declare -A RC=()
-ANY_FAILED=0
 run_stage() {  # run_stage <id> <stage> <env> <subcommand...>: log, record exit code, never abort
   local id="$1" stage="$2" env="$3"; shift 3
   local rc=0 log="$LOG_DIR/${id}_${stage}.log"
   echo "[$(date +%T)] cc18_$id $stage ($env)"
   bash scripts/envrun.sh "$env" python experiments/run.py "${OPTS[@]}" "$@" >"$log" 2>&1 || rc=$?
   RC["$id:$stage"]=$rc
-  if [ "$rc" -ne 0 ]; then ANY_FAILED=1; echo "  -> exit $rc (see $log)"; fi
+  if [ "$rc" -ne 0 ]; then echo "  -> exit $rc (see $log)"; fi
   return 0
 }
 
@@ -138,4 +137,8 @@ for row in "${ROWS[@]}"; do
   echo
 done
 echo "logs: $LOG_DIR/<id>_<stage>.log; MST bounds paths: $LOG_DIR/mst_bounds.txt"
-exit "$ANY_FAILED"
+# exit status from the FINAL exit codes: a prepare that succeeded on retry is a success
+for rc in "${RC[@]}"; do
+  if [ "$rc" != 0 ] && [ "$rc" != skip ]; then exit 1; fi
+done
+exit 0

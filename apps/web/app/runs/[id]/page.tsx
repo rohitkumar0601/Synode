@@ -7,15 +7,18 @@ import { ErrorState, errorDetail } from "@/components/error-state";
 import { JobProgress } from "@/components/job-progress";
 import { initialRanking, PresetSwitcher, type Ranking } from "@/components/preset-switcher";
 import { RecommendationCard } from "@/components/recommendation-card";
+import { TerminateRunButton } from "@/components/run-controls";
 import { ScoreChart } from "@/components/score-chart";
 import { JobWarnings } from "@/components/job-warnings";
 import { ParetoPlot } from "@/components/pareto-plot";
 import { Scorecard } from "@/components/scorecard";
 import { StatusBadge } from "@/components/status-badge";
+import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { getReport, getRun, listGenerators } from "@/lib/api";
+import { budgetLabel } from "@/lib/budget";
 import { pollMs } from "@/lib/poll";
-import { runState } from "@/lib/run-state";
+import { failedNote, runState } from "@/lib/run-state";
 
 export default function RunDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -55,6 +58,9 @@ export default function RunDetailPage() {
   const rep = report.data;
   const rec = rep?.recommendation ?? null;
   const refreshError = run.isError ? run.error : report.isError && rep ? report.error : null;
+  const jobParams = rep
+    ? Object.fromEntries(rep.per_job.map((j) => [j.job_id, j.generator_params ?? null]))
+    : undefined;
 
   return (
     <div className="space-y-8">
@@ -64,8 +70,23 @@ export default function RunDetailPage() {
           <p className="text-sm text-muted-foreground">
             Dataset {data.dataset_id} · {data.generators.length} generators · seeds {data.seeds.join(", ")}
           </p>
+          <Badge
+            variant="outline"
+            className="mt-2"
+            title={
+              data.budget_profile
+                ? "Training-budget profile the run was planned with"
+                : "This run was created before budget profiles were recorded"
+            }
+          >
+            {data.budget_profile ? `Budget: ${budgetLabel(data.budget_profile)}` : "Budget: not recorded"}
+          </Badge>
         </div>
-        <StatusBadge state={runState(data)} />
+        <div className="flex flex-wrap items-center gap-3">
+          <StatusBadge state={runState(data)} />
+          {failedNote(data) && <span className="text-sm text-muted-foreground">{failedNote(data)}</span>}
+          {!data.done && <TerminateRunButton runId={data.run_id} />}
+        </div>
       </header>
 
       {refreshError !== null && (
@@ -74,7 +95,7 @@ export default function RunDetailPage() {
         </div>
       )}
 
-      <JobProgress run={data} />
+      <JobProgress run={data} params={jobParams} />
 
       <section aria-labelledby="results-heading" className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">

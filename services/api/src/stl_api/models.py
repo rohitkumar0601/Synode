@@ -32,6 +32,9 @@ class Run(SQLModel, table=True):
     preset: str
     weights_json: str | None = None
     allow_gpu_only: bool = False
+    # stl_core.budget profile the run was planned with; None for runs created before it existed
+    # (and for imported runs).
+    budget_profile: str | None = None
     created_at: datetime = Field(
         default_factory=_now, sa_column=Column(DateTime(timezone=True), nullable=False)
     )

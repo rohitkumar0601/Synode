@@ -242,6 +242,11 @@ def cmd_report(cfg: dict, args) -> int:
         print(f"warning: run {run_id} mixes metric versions "
               f"({', '.join(str(v) for v in versions)}): re-run metrics --recompute and "
               "evaluate", file=sys.stderr)
+    missing_sc = [r.job_id for r in reports if r.status == "done" and any("synthcity metrics missing" in w for w in (r.warnings or []))]
+    if missing_sc:
+        print(f"warning: run {run_id} has {len(missing_sc)} job(s) missing synthcity metrics "
+              f"({', '.join(missing_sc[:5])}{'...' if len(missing_sc) > 5 else ''}): "
+              "run `metrics` stage and re-evaluate", file=sys.stderr)
     aggs = aggregate(reports)
     try:
         weights = tuple(float(w) for w in args.weights.split(",")) if args.weights else None

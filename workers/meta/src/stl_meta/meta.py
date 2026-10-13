@@ -11,9 +11,10 @@ Meta-dataset (``build_meta_dataset``): one row per dataset of the frozen YAML
 * ``score__<gen>``: the candidate's balanced score (gate-failing candidates keep their score);
   ``pass__<gen>``: whether it passed the gate.
 
-A dataset whose meta-features are missing or failed, that has no run / no reports, or whose
-run is incomplete (a planned job of the manifest, train_copy included, without a report; a
-report is terminal, "done" or "failed") is not a row: it is listed in ``df.attrs["excluded"]``
+A dataset whose meta-features are missing, failed, skipped or malformed, that has no run /
+no reports, a malformed report, or whose run is incomplete (a planned job of the
+manifest, train_copy included, without a report; a report is terminal, "done" or
+"failed") is not a row: it is listed in ``df.attrs["excluded"]``
 as ``{"dataset_id", "reason"}`` -- an incomplete run is never labelled ``"none"``.
 
 Regret of predicting generator ``g`` on a labelled dataset (``regret``): with P the
@@ -73,11 +74,18 @@ def _features(store: ArtifactStore, did: str) -> tuple[dict[str, float] | None, 
     key = keys.dataset_metafeatures(did)
     if not store.exists(key):
         return None, "missing metafeatures.json"
-    rec = store.read_json(key)
-    feats = rec.get("features")
-    if not isinstance(feats, dict) or not feats:
-        return None, f"metafeature extraction failed: {rec.get('error') or 'no features'}"
-    return {str(k): (math.nan if v is None else float(v)) for k, v in feats.items()}, None
+    try:
+        rec = store.read_json(key)
+        if not isinstance(rec, dict):
+            raise ValueError("not a JSON object")
+        feats = rec.get("features")
+        if rec.get("skipped"):
+            return None, f"metafeatures skipped: {rec['skipped']}"
+        if not isinstance(feats, dict) or not feats:
+            return None, f"metafeature extraction failed: {rec.get('error') or 'no features'}"
+        return {str(k): (math.nan if v is None else float(v)) for k, v in feats.items()}, None
+    except Exception as exc:  # one bad file excludes its dataset, not the whole meta-eval
+        return None, f"malformed metafeatures.json: {type(exc).__name__}: {exc}"
 
 
 def _reports(store: ArtifactStore, rid: str) -> tuple[list[MetricReport] | None, str | None]:
@@ -88,7 +96,11 @@ def _reports(store: ArtifactStore, rid: str) -> tuple[list[MetricReport] | None,
     for job in jobs:
         key = keys.report(job.run_id, job.job_id)
         if store.exists(key):  # a report is terminal: status "done" or "failed"
-            reports[job.job_id] = MetricReport.model_validate(store.read_json(key))
+            try:
+                reports[job.job_id] = MetricReport.model_validate(store.read_json(key))
+            except Exception as exc:  # excludes this dataset only
+                return None, (f"malformed report {job.job_id}: {type(exc).__name__}: "
+                              f"{str(exc).splitlines()[0]}")
     if len(reports) < len(jobs):
         return None, f"incomplete run ({len(reports)}/{len(jobs)} jobs reported)"
     out = [r for r in reports.values() if r.generator not in EXCLUDED_GENERATORS]

@@ -48,6 +48,19 @@ def _parse_weights(raw: str | None) -> tuple[float, float, float] | None:
     return parts  # type: ignore[return-value]  (length checked by resolve_weights)
 
 
+def _stored_params(store: ArtifactStore, run_id: str, job_id: str) -> dict | None:
+    """The job's generator_params.json (written before fit), or None when absent/unreadable;
+    used when the job has no report yet or its report predates the field."""
+    key = keys.generator_params(run_id, job_id)
+    try:
+        if store.exists(key):
+            got = store.read_json(key)
+            return got if isinstance(got, dict) else None
+    except Exception:
+        return None
+    return None
+
+
 @router.get("/runs/{run_id}/report")
 def run_report(run_id: str, preset: str = "balanced", weights: str | None = None,
                session: Session = Depends(get_session),
@@ -91,9 +104,21 @@ def run_report(run_id: str, preset: str = "balanced", weights: str | None = None
             except Exception:
                 status = "unknown"
             warnings = [unreadable] if unreadable else []
+        params = report.generator_params if report is not None else None
         per_job.append({"job_id": job.job_id, "generator": job.generator, "seed": job.seed,
-                        "status": status, "warnings": warnings})
+                        "status": status, "warnings": warnings,
+                        "generator_params": params or _stored_params(store, run_id, job.job_id)})
+    run_warnings: list[str] = []
+    missing_synthcity = [
+        r.job_id for r in reports
+        if r.status == "done" and any("synthcity metrics missing" in w for w in (r.warnings or []))
+    ]
+    if missing_synthcity:
+        run_warnings.append(
+            f"{len(missing_synthcity)} job(s) missing synthcity metrics: run `metrics` stage"
+        )
     out: dict = {"run_id": run_id, "jobs_reported": len(reports), "jobs_total": len(jobs),
+                 "warnings": run_warnings,
                  "recommendation": None, "aggregated": [], "pareto": [], "per_job": per_job}
     if reports:
         aggs = aggregate(reports)

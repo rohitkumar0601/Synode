@@ -17,6 +17,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ApiError, createRun, listDatasets, listGenerators } from "@/lib/api";
+import { BUDGET_PROFILES, DEFAULT_BUDGET_PROFILE, type BudgetProfile } from "@/lib/budget";
 import type { Weights } from "@/lib/presets";
 import type { CreateRunBody } from "@/lib/types";
 
@@ -55,6 +56,7 @@ function NewRunForm() {
   const [preset, setPreset] = useState<PresetChoice>("balanced");
   const [custom, setCustom] = useState<Weights>([0.4, 0.3, 0.3]);
   const [allowGpu, setAllowGpu] = useState(false);
+  const [budget, setBudget] = useState<BudgetProfile>(DEFAULT_BUDGET_PROFILE);
 
   const registered = (datasets.data ?? []).filter((d) => d.registered);
   const datasetId = datasetChoice ?? (preselect && registered.some((d) => d.id === preselect) ? preselect : "");
@@ -90,6 +92,7 @@ function NewRunForm() {
       seeds: seedCheck.seeds,
       preset: preset === "custom" ? "balanced" : preset,
       allow_gpu_only: allowGpu,
+      budget_profile: budget,
     };
     if (preset === "custom") body.weights = custom;
     run.mutate(body);
@@ -156,6 +159,26 @@ function NewRunForm() {
             {seedCheck.error}
           </p>
         )}
+      </section>
+
+      <section className="space-y-2">
+        <Label htmlFor="budget">Training budget</Label>
+        <NativeSelect
+          id="budget"
+          value={budget}
+          onChange={(e) => setBudget(e.target.value as BudgetProfile)}
+          aria-describedby="budget-help"
+          className="max-w-md"
+        >
+          {BUDGET_PROFILES.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.option}
+            </option>
+          ))}
+        </NativeSelect>
+        <p id="budget-help" className="text-xs text-muted-foreground">
+          {BUDGET_PROFILES.find((p) => p.id === budget)?.hint}
+        </p>
       </section>
 
       <WeightsEditor preset={preset} custom={custom} onPresetChange={setPreset} onCustomChange={setCustom} />

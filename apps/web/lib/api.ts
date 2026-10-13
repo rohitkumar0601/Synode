@@ -9,6 +9,8 @@ import type {
   Run,
   RegisterBody,
   RetryResult,
+  CancelResult,
+  ResumeResult,
   RunReport,
   RunSummary,
   TableMetadata,
@@ -123,6 +125,14 @@ export const getRun = (id: string) => apiFetch<Run>(`/runs/${encodeURIComponent(
 
 export const retryRun = (id: string) =>
   apiFetch<RetryResult>(`/runs/${encodeURIComponent(id)}/retry`, { method: "POST" });
+
+/** Terminate a run: unfinished jobs are cancelled, running training is killed, finished results stay. */
+export const cancelRun = (id: string) =>
+  apiFetch<CancelResult>(`/runs/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+
+/** Re-enqueue jobs whose queue messages were lost (stuck at generated, or stalled). */
+export const resumeRun = (id: string) =>
+  apiFetch<ResumeResult>(`/runs/${encodeURIComponent(id)}/resume`, { method: "POST" });
 
 export function getReport(id: string, opts: { preset?: string; weights?: number[] } = {}) {
   const q = new URLSearchParams();

@@ -9,6 +9,13 @@ the flag. Resume (POST /runs/{id}/resume) re-enqueues jobs whose Celery messages
 (e.g. a broker restart): ``generated`` jobs get metrics -> evaluate, ``queued`` jobs the full
 chain, and jobs stuck in fitting/sampling/evaluating for longer than STL_STALL_SECONDS are
 treated as lost. Jobs whose messages are still in the broker are left alone.
+
+Training budget: a run is planned under a budget profile (stl_core.budget) taken from the
+body's ``budget_profile`` or else STL_BUDGET_PROFILE (default ``library``). The profile's
+epoch count goes into the params of the epoch-taking generators (EPOCH_GENERATORS, as the
+Hydra config wires ``${budget.epochs}``; ``library`` passes none, so library defaults apply;
+explicit ``params`` win). The per-job time cap is the profile's, unless STL_TIME_CAP_SECONDS
+is set: an explicit operator cap overrides every profile (it is a deployment safety bound).
 """
 from __future__ import annotations
 
@@ -23,6 +30,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, StrictInt, field_validator, model_validator
 from sqlmodel import Session, select
+from stl_core.budget import BUDGET_PROFILES, check_profile
 from stl_core.catalog import CATALOG
 from stl_core.decision import resolve_weights
 from stl_core.schemas import JobSpec
@@ -47,6 +55,11 @@ from stl_api.settings import Settings
 router = APIRouter(prefix="/runs", tags=["runs"])
 TERMINAL = TERMINAL_STATES
 RUNNING = ("fitting", "sampling", "evaluating")
+# Generators whose epoch count comes from the budget profile; must match the generators
+# experiments/conf/generators/default.yaml wires to ${budget.epochs} (tested).
+EPOCH_GENERATORS = frozenset({
+    "ctgan", "tvae", "sdv_ctgan", "sdv_tvae", "tabddpm", "great", "great_qwen",
+})
 
 
 def get_dispatcher(request: Request) -> Dispatcher:
@@ -61,6 +74,13 @@ class RunBody(BaseModel):
     weights: list[float] | None = None
     allow_gpu_only: bool = False
     params: dict[str, dict] | None = None
+    # stl_core.budget profile; None means the STL_BUDGET_PROFILE setting.
+    budget_profile: str | None = None
+
+    @field_validator("budget_profile")
+    @classmethod
+    def _budget_profile(cls, v: str | None) -> str | None:
+        return None if v is None else check_profile(v)
 
     @field_validator("dataset_id")
     @classmethod
@@ -148,7 +168,7 @@ def _refresh(session: Session, store: ArtifactStore, run: Run) -> tuple[list[Job
 def _summary(run: Run, jobs: list[Job], stale: bool) -> dict:
     return {"run_id": run.id, "dataset_id": run.dataset_id,
             "generators": json.loads(run.generators_json), "seeds": json.loads(run.seeds_json),
-            "preset": run.preset,
+            "preset": run.preset, "budget_profile": run.budget_profile,
             "weights": json.loads(run.weights_json) if run.preset == "custom" else None,
             "counts": dict(Counter(j.state for j in jobs)),
             "done": bool(jobs) and all(j.state in TERMINAL for j in jobs), "stale": stale,
@@ -184,6 +204,18 @@ def _dispatch(session: Session, store: ArtifactStore, dispatcher: Dispatcher, ru
     return failures
 
 
+def _budget_params(generators: list[str], params: dict[str, dict] | None,
+                   epochs: int | None) -> dict[str, dict]:
+    """Per-generator params with the profile's epochs on the epoch-taking generators.
+    ``epochs`` None (``library``) adds nothing; explicit params take precedence."""
+    out = {g: dict(p) for g, p in (params or {}).items()}
+    if epochs is not None:
+        for g in generators:
+            if g in EPOCH_GENERATORS:
+                out[g] = {"epochs": epochs, **out.get(g, {})}
+    return out
+
+
 @router.post("", status_code=201, response_model=None)
 def create_run(body: RunBody, session: Session = Depends(get_session),
                store: ArtifactStore = Depends(get_store),
@@ -203,15 +235,19 @@ def create_run(body: RunBody, session: Session = Depends(get_session),
                                          "run id")
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
+    profile = body.budget_profile or settings.budget_profile
+    budget = BUDGET_PROFILES[profile]
+    cap = settings.time_cap_seconds or budget["time_cap_seconds"]
     try:
         jobs = plan_run(store, run_id, body.dataset_id, body.generators, body.seeds,
-                        body.params, time_cap_seconds=settings.time_cap_seconds)
+                        _budget_params(body.generators, body.params, budget["epochs"]),
+                        time_cap_seconds=cap, budget_profile=profile)
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
     run = Run(id=run_id, dataset_id=body.dataset_id,
               generators_json=json.dumps(body.generators), seeds_json=json.dumps(body.seeds),
               preset=preset, weights_json=json.dumps(list(weights)),
-              allow_gpu_only=body.allow_gpu_only)
+              allow_gpu_only=body.allow_gpu_only, budget_profile=profile)
     session.add(run)
     session.flush()
     rows = [Job(id=f"{run_id}/{j.job_id}", run_id=run_id, job_id=j.job_id,
@@ -314,6 +350,14 @@ def cancel_run(run_id: str, session: Session = Depends(get_session),
     return {"run_id": run_id, "cancelled": n}
 
 
+def _stall_seconds(settings: Settings, spec: JobSpec) -> float:
+    """STL_STALL_SECONDS (or explicit cap + 600), else the job's own time cap + 600 s."""
+    if settings.stall_seconds is not None:
+        return settings.stall_seconds
+    cap = spec.time_cap_seconds or BUDGET_PROFILES["library"]["time_cap_seconds"]
+    return cap + 600
+
+
 def _in_flight(waiting: set[tuple[str, str]]) -> bool:
     """A job message is still in the broker. A stl.metrics message on another queue than
     METRICS_QUEUE (enqueued before it existed) waits behind training, so it does not count."""
@@ -352,7 +396,7 @@ def resume_run(run_id: str, session: Session = Depends(get_session),
         state = job_state(store, spec)["state"]
         if state in RUNNING:
             age = now - store.modified(keys.status(run_id, spec.job_id))
-            if age < settings.stall_seconds:
+            if age < _stall_seconds(settings, spec):
                 continue
         if state in ("generated", "evaluating"):
             plan.append((spec, "eval"))

@@ -84,7 +84,9 @@ export type JobState =
   | "generated"
   | "evaluating"
   | "done"
-  | "failed";
+  | "failed"
+  /** Stopped by POST /runs/{id}/cancel (terminal; a retry runs it again). */
+  | "cancelled";
 
 export interface RunJob {
   job_id: string;
@@ -105,6 +107,22 @@ export interface RunSummary {
   done: boolean;
   /** True when the artifact store was unreachable, so job states may be out of date. */
   stale?: boolean;
+  /** True when at least one job was cancelled (the run was terminated). */
+  cancelled?: boolean;
+  /** Training-budget profile (lib/budget.ts); null for runs created before profiles existed. */
+  budget_profile?: string | null;
+}
+
+/** POST /runs/{id}/cancel response (202; idempotent: 0 when nothing was left to cancel). */
+export interface CancelResult {
+  run_id: string;
+  cancelled: number;
+}
+
+/** POST /runs/{id}/resume response (200; the 503 body has the same shape plus `detail`). */
+export interface ResumeResult {
+  run_id: string;
+  resumed: string[];
 }
 
 /** GET /runs/{id}. */
@@ -170,6 +188,21 @@ export interface ParetoPoint {
   gate_passed: boolean;
 }
 
+/**
+ * What a job trained with (runs/<run>/<job>/generator_params.json, copied into its report):
+ * the library's signature defaults merged with the kwargs actually passed.
+ */
+export interface GeneratorParams {
+  library: string | null;
+  library_version: string | null;
+  /** Resolved parameters; nested objects (e.g. be-great `sample`) group sub-call params. */
+  params: Record<string, unknown>;
+  /** Parameter names we set instead of the library default (dotted for nested ones). */
+  overrides: string[];
+  /** Budget profile of the run; null for runs planned without one. */
+  profile?: string | null;
+}
+
 export interface PerJobReport {
   job_id: string;
   generator: string;
@@ -177,6 +210,8 @@ export interface PerJobReport {
   /** A job state while the run is live; "unknown" when the store could not be read. */
   status: JobState | "unknown";
   warnings: string[];
+  /** Null when not recorded (older runs, or the job has not started training yet). */
+  generator_params?: GeneratorParams | null;
 }
 
 export interface RunReport {
@@ -203,6 +238,8 @@ export interface CreateRunBody {
   weights?: [number, number, number];
   allow_gpu_only?: boolean;
   params?: Record<string, Record<string, unknown>>;
+  /** Training-budget profile; the API's STL_BUDGET_PROFILE when omitted. */
+  budget_profile?: string;
 }
 
 export interface ImportResult {

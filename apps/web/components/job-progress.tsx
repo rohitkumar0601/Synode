@@ -4,12 +4,15 @@ import { toast } from "sonner";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, RotateCw } from "lucide-react";
 import { ErrorState } from "@/components/error-state";
+import { GeneratorParamsDisclosure } from "@/components/generator-params";
 import { StatusBadge } from "@/components/status-badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
+import { ResumeRunButton } from "@/components/run-controls";
+import { StageBar } from "@/components/stage-bar";
 import { ApiError, retryRun } from "@/lib/api";
-import type { Run } from "@/lib/types";
+import { canResume, progressSummary } from "@/lib/run-state";
+import type { GeneratorParams, Run } from "@/lib/types";
 
 /** The last non-empty line of a traceback is the exception itself, e.g. "torch.OutOfMemoryError: ...". */
 export function lastErrorLine(error: string): string {
@@ -29,17 +32,21 @@ function retriedFrom503(e: unknown): number | null {
   return Array.isArray(retried) ? retried.length : null;
 }
 
-export function JobProgress({ run }: { run: Run }) {
+/**
+ * `params` maps job_id to what the job trained with (from the run report); undefined while the
+ * report has not loaded, so no "Parameters" disclosure is shown yet.
+ */
+export function JobProgress({ run, params }: { run: Run; params?: Record<string, GeneratorParams | null> }) {
   const qc = useQueryClient();
-  const total = run.jobs.length;
-  const finished = run.jobs.filter((j) => j.state === "done" || j.state === "failed").length;
-  const failed = run.jobs.filter((j) => j.state === "failed").length;
-  const pct = total === 0 ? 0 : Math.round((finished / total) * 100);
+  const counts: Run["counts"] = {};
+  for (const j of run.jobs) counts[j.state] = (counts[j.state] ?? 0) + 1;
+  const failed = counts.failed ?? 0;
+  const cancelled = counts.cancelled ?? 0;
 
   const retry = useMutation({
     mutationFn: () => retryRun(run.run_id),
     onSuccess: (r) => {
-      toast.success(`Retried ${r.retried.length} failed job${r.retried.length === 1 ? "" : "s"}`);
+      toast.success(`Retried ${plural(r.retried.length)}`);
     },
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: ["run", run.run_id] });
@@ -55,12 +62,10 @@ export function JobProgress({ run }: { run: Run }) {
         <h2 id="progress-heading" className="text-lg font-semibold">
           Progress
         </h2>
-        <p className="text-sm text-muted-foreground tabular-nums">
-          {finished} of {total} jobs finished{failed > 0 ? ` (${failed} failed)` : ""}
-        </p>
+        <p className="text-sm text-muted-foreground tabular-nums">{progressSummary(counts)}</p>
       </div>
 
-      <Progress value={pct} aria-label="Run progress" />
+      <StageBar counts={counts} label="Run progress" legend />
 
       {run.stale && (
         <Alert>
@@ -72,12 +77,15 @@ export function JobProgress({ run }: { run: Run }) {
         </Alert>
       )}
 
-      {failed > 0 && (
+      {(failed > 0 || cancelled > 0 || canResume(run)) && (
         <div className="flex flex-wrap items-center gap-3">
-          <Button variant="outline" size="sm" onClick={() => retry.mutate()} disabled={retry.isPending}>
-            <RotateCw aria-hidden="true" />
-            {retry.isPending ? "Retrying…" : "Retry failed jobs"}
-          </Button>
+          {canResume(run) && <ResumeRunButton runId={run.run_id} />}
+          {(failed > 0 || cancelled > 0) && (
+            <Button variant="outline" size="sm" onClick={() => retry.mutate()} disabled={retry.isPending}>
+              <RotateCw aria-hidden="true" />
+              {retry.isPending ? "Retrying…" : cancelled > 0 ? "Retry cancelled and failed jobs" : "Retry failed jobs"}
+            </Button>
+          )}
           <div role="status" className="text-sm text-muted-foreground">
             {retry.isSuccess ? `Retried ${plural(retry.data.retried.length)}.` : null}
           </div>
@@ -109,6 +117,11 @@ export function JobProgress({ run }: { run: Run }) {
               </span>
               <StatusBadge state={j.state} />
             </div>
+            <GeneratorParamsDisclosure
+              params={params === undefined ? undefined : (params[j.job_id] ?? null)}
+              state={j.state}
+              label={`${j.generator} seed ${j.seed}`}
+            />
             {j.state === "failed" && j.error && (
               <div className="space-y-1">
                 <p className="break-words font-mono text-xs text-destructive">{lastErrorLine(j.error)}</p>

@@ -148,14 +148,19 @@ def _register(store: ArtifactStore, session: Session, row: Dataset, df: pd.DataF
     return row
 
 
-def _enqueue_metafeatures(request: Request, store: ArtifactStore, dataset_id: str) -> None:
-    """After a (re-)registration: drop meta-features/suggestion computed from older data and
-    queue stl.metafeatures (q.meta). Failures are logged; registration still succeeds."""
+def _clear_metafeatures(store: ArtifactStore, dataset_id: str) -> None:
+    """Remove the dataset's meta-features and suggestion (logged, never raises)."""
     try:
         store.delete(keys.dataset_suggestion(dataset_id))
         store.delete(keys.dataset_metafeatures(dataset_id))
     except Exception:
         log.exception("could not clear stale meta-features of dataset %s", dataset_id)
+
+
+def _enqueue_metafeatures(request: Request, store: ArtifactStore, dataset_id: str) -> None:
+    """After a (re-)registration: drop meta-features/suggestion computed from older data and
+    queue stl.metafeatures (q.meta). Failures are logged; registration still succeeds."""
+    _clear_metafeatures(store, dataset_id)
     try:
         request.app.state.dispatcher.enqueue_metafeatures(dataset_id)
     except Exception:
@@ -345,17 +350,29 @@ def _metafeature_error(store: ArtifactStore, dataset_id: str) -> str | None:
     return str(err) if err else None
 
 
+CLASSIFICATION_ONLY = "RQ3 predictor covers classification datasets only"
+
+
+def _is_classification(row: Dataset) -> bool:
+    try:
+        return json.loads(row.metadata_json).get("task", "classification") == "classification"
+    except Exception:
+        return True  # unreadable metadata: let the stored files decide
+
+
 @router.get("/{dataset_id}/suggestion")
 def get_suggestion(dataset_id: str, session: Session = Depends(get_session),
                    store: ArtifactStore = Depends(get_store)) -> dict:
     """RQ3 best-generator suggestion (exploratory). 404 for an unknown dataset (as every
     /datasets/{id} endpoint); otherwise always 200 with the stored
     ``{"available": true, "generator", "probabilities", "model"}`` or
-    ``{"available": false, "reason"}`` (not registered, extraction failed, no predictor
-    trained, not computed yet, or an unreadable file)."""
+    ``{"available": false, "reason"}`` (not registered, not a classification dataset,
+    extraction failed, no predictor trained, not computed yet, or an unreadable file)."""
     row = _get(session, dataset_id)
     if not row.registered:
         return _unavailable("dataset is not registered")
+    if not _is_classification(row):
+        return _unavailable(CLASSIFICATION_ONLY)
     key = keys.dataset_suggestion(dataset_id)
     if store.exists(key):
         return _read_suggestion(store, key)
@@ -365,6 +382,25 @@ def get_suggestion(dataset_id: str, session: Session = Depends(get_session),
     if not store.exists(keys.meta_predictor()):
         return _unavailable("no meta-predictor has been trained yet (RQ3 meta-benchmark)")
     return _unavailable("suggestion has not been computed yet")
+
+
+@router.post("/{dataset_id}/suggestion/refresh", status_code=202)
+def refresh_suggestion(dataset_id: str, request: Request,
+                       session: Session = Depends(get_session),
+                       store: ArtifactStore = Depends(get_store)) -> dict:
+    """Recompute meta-features and the suggestion (e.g. after the meta-predictor was
+    (re)trained). Allowed even when runs use the dataset: nothing about the dataset itself
+    changes. 404 unknown dataset, 409 not registered, 503 if the task cannot be queued."""
+    row = _get(session, dataset_id)
+    if not row.registered:
+        raise HTTPException(409, f"dataset {dataset_id} is not registered")
+    _clear_metafeatures(store, dataset_id)
+    try:
+        request.app.state.dispatcher.enqueue_metafeatures(dataset_id)
+    except Exception as e:
+        log.exception("could not enqueue meta-feature task for dataset %s", dataset_id)
+        raise HTTPException(503, f"could not queue the meta-feature task: {e}") from e
+    return {"dataset_id": dataset_id, "queued": True}
 
 
 @router.get("")
@@ -386,10 +422,14 @@ def get_dataset(dataset_id: str, session: Session = Depends(get_session),
 
 
 @router.delete("/{dataset_id}", status_code=204)
-def delete_dataset(dataset_id: str, session: Session = Depends(get_session)) -> None:
-    """Delete the row. Stored objects are left in place (ArtifactStore has no delete)."""
+def delete_dataset(dataset_id: str, session: Session = Depends(get_session),
+                   store: ArtifactStore = Depends(get_store)) -> None:
+    """Delete the row and the dataset's meta-features/suggestion. The registered data
+    (prepared table, splits, upload) is left in the store; dataset ids are never reused
+    for uploads, and a built-in re-registration overwrites it."""
     row = _get(session, dataset_id)
     if session.exec(select(Run).where(Run.dataset_id == dataset_id)).first() is not None:
         raise HTTPException(409, "dataset is referenced by runs")
     session.delete(row)
     session.commit()
+    _clear_metafeatures(store, dataset_id)

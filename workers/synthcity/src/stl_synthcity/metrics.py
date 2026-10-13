@@ -129,15 +129,24 @@ def compute_synthcity_metrics(train: pd.DataFrame, control: pd.DataFrame,
             real_dl, syn_dl)["mean"])
 
     def domias() -> None:
-        auc = float(DomiasMIAKDE(**common).evaluate(gt_dl, syn_mia_dl, mem_dl, syn_mia_dl,
-                                                    reference_size=m)["aucroc"])
-        out["mia_auc"] = auc
-        out["mia_domias_advantage"] = float(max(0.0, 2 * (auc - 0.5)))
+        try:
+            auc = float(DomiasMIAKDE(**common).evaluate(gt_dl, syn_mia_dl, mem_dl, syn_mia_dl,
+                                                        reference_size=m)["aucroc"])
+            out["mia_auc"] = auc
+            out["mia_domias_advantage"] = float(max(0.0, 2 * (auc - 0.5)))
+            out["domias_status"] = "ok"
+        except Exception as exc:
+            # DOMIAS may fail (e.g. LinAlgError on low-epoch data, degenerate distributions, or all-categorical datasets).
+            # Record as not applicable / failed rather than failing the metrics step;
+            # the evaluate stage falls back to nearest-neighbour distance MIA.
+            out["domias_status"] = f"not applicable / failed: {type(exc).__name__}: {exc}"
+            out["mia_auc"] = None
+            out["mia_domias_advantage"] = None
 
     try:
         attempt("alpha_precision", alpha_precision)
         attempt("detection", detection)
-        attempt("domias", domias)
+        domias()
     finally:
         shutil.rmtree(workspace, ignore_errors=True)
     if errors:

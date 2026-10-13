@@ -1,9 +1,17 @@
 "use client";
 
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, Info, Sparkles } from "lucide-react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { suggestionView, useDatasetSuggestion } from "@/lib/suggestion";
+import {
+  canRefreshSuggestion,
+  refreshSuggestion,
+  suggestionKey,
+  suggestionView,
+  useDatasetSuggestion,
+} from "@/lib/suggestion";
 import type { GeneratorInfo } from "@/lib/types";
 
 export const EXPLORATORY_HELP =
@@ -14,27 +22,51 @@ export const EXPLORATORY_HELP =
 /**
  * "Suggested: <generator> (p=…)" for the chosen dataset, with a one-click "Use suggestion"
  * that adds the generator to the selection (others stay selected). Shows a subtle
- * "No generator suggestion yet" when the API has none, and nothing while loading or on error.
+ * "No generator suggestion yet" when the API has none (with a "Refresh suggestion" link when
+ * nothing was computed yet or no predictor existed), and nothing while loading or on error.
+ * While the suggestion is being computed it is polled (lib/suggestion).
  */
-export function GeneratorSuggestion({
-  datasetId,
-  generators,
-  selected,
-  onChange,
-}: {
+export function GeneratorSuggestion(props: SuggestionProps) {
+  // Keyed by dataset so the polling window restarts when another dataset is chosen.
+  return <SuggestionBox key={props.datasetId} {...props} />;
+}
+
+interface SuggestionProps {
   datasetId: string;
   generators: GeneratorInfo[];
   selected: string[];
   onChange: (next: string[]) => void;
-}) {
-  const query = useDatasetSuggestion(datasetId);
+}
+
+function SuggestionBox({ datasetId, generators, selected, onChange }: SuggestionProps) {
+  const [pollStartedAt, setPollStartedAt] = useState(() => Date.now());
+  const queryClient = useQueryClient();
+  const query = useDatasetSuggestion(datasetId, pollStartedAt);
+  const refresh = useMutation({
+    mutationFn: () => refreshSuggestion(datasetId),
+    onSuccess: () => {
+      setPollStartedAt(Date.now());
+      return queryClient.invalidateQueries({ queryKey: suggestionKey(datasetId) });
+    },
+  });
   if (!datasetId || !query.data) return null;
   const view = suggestionView(query.data);
   if (!view) {
     const reason = query.data.available ? undefined : query.data.reason;
     return (
-      <p className="text-xs text-muted-foreground" title={reason}>
-        No generator suggestion yet.
+      <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        <span title={reason}>No generator suggestion yet.</span>
+        {canRefreshSuggestion(query.data) ? (
+          <button
+            type="button"
+            className="text-primary underline-offset-4 hover:underline disabled:opacity-50"
+            disabled={refresh.isPending}
+            onClick={() => refresh.mutate()}
+          >
+            Refresh suggestion
+          </button>
+        ) : null}
+        {refresh.isError ? <span className="text-destructive">{refresh.error.message}</span> : null}
       </p>
     );
   }

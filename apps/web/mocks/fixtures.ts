@@ -4,6 +4,7 @@ import type {
   SuggestionAvailable,
   SuggestionUnavailable,
   GeneratorInfo,
+  GeneratorParams,
   JobState,
   RankedCandidate,
   Recommendation,
@@ -315,3 +316,53 @@ export const OOM_TRACEBACK = [
   "torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.00 GiB (GPU 0; 7.79 GiB total capacity)",
   "",
 ].join("\n");
+
+/** Library defaults per generator, as each wrapper's resolved_params() records them. */
+const LIBRARY_PARAMS: Record<string, { library: string; library_version: string; params: Record<string, unknown>; epochKey?: string }> = {
+  gaussian_copula: {
+    library: "sdv",
+    library_version: "1.38.5",
+    params: { enforce_min_max_values: true, enforce_rounding: true, locales: ["en_US"], numerical_distributions: null, default_distribution: null },
+  },
+  ctgan: {
+    library: "synthcity",
+    library_version: "0.2.12",
+    params: { n_iter: 2000, batch_size: 200, lr: 0.001, patience: 5, n_iter_min: 100, device: "cpu", random_state: 0 },
+    epochKey: "n_iter",
+  },
+  tvae: {
+    library: "synthcity",
+    library_version: "0.2.12",
+    params: { n_iter: 1000, batch_size: 200, lr: 0.001, patience: 5, n_iter_min: 100, device: "cpu", random_state: 0 },
+    epochKey: "n_iter",
+  },
+  great: {
+    library: "be-great",
+    library_version: "0.0.14",
+    params: { llm: "distilgpt2", epochs: 100, batch_size: 8, save_strategy: "no", sample: { guided_sampling: true, temperature: 0.7 } },
+    epochKey: "epochs",
+  },
+};
+
+const PROFILE_EPOCHS: Record<string, number | null> = { library: null, equal50: 50, smoke: 5 };
+
+/** GET /runs/{id}/report per_job generator_params for a job that has started training. */
+export function generatorParamsFor(generator: string, seed: number, profile: string): GeneratorParams {
+  const lib = LIBRARY_PARAMS[generator];
+  if (!lib) return { library: "stl_core", library_version: null, params: {}, overrides: [], profile };
+  const params: Record<string, unknown> = { ...lib.params };
+  const overrides: string[] = [];
+  if ("random_state" in params) {
+    params.random_state = seed;
+    overrides.push("random_state");
+  }
+  const epochs = PROFILE_EPOCHS[profile] ?? null;
+  if (lib.epochKey && epochs !== null) {
+    params[lib.epochKey] = epochs;
+    overrides.push(lib.epochKey);
+  }
+  if (generator === "great") overrides.push("llm", "sample.guided_sampling", "save_strategy");
+  return { library: lib.library, library_version: lib.library_version, params, overrides: overrides.sort(), profile };
+}
+
+export const BUDGET_PROFILE_IDS = ["equal50", "library", "smoke"] as const;

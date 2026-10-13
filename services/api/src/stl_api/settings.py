@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from stl_core.budget import DEFAULT_PROFILE, check_profile
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -11,10 +13,14 @@ class Settings:
     max_upload_mb: int
     cors_origins: list[str]
     dispatch: str  # "celery" | "none"
-    time_cap_seconds: float = 7200.0
+    # Default training-budget profile for POST /runs (stl_core.budget; a run may override it).
+    budget_profile: str = DEFAULT_PROFILE
+    # Per-job time cap. None (STL_TIME_CAP_SECONDS unset) means the run's budget profile cap
+    # (library 86400, equal50 7200, smoke 1800); an explicit value overrides every profile's.
+    time_cap_seconds: float | None = None
     # POST /runs/{id}/resume treats a running job whose status has not changed for this long
-    # as lost (default: the time cap + 600 s).
-    stall_seconds: float = 7800.0
+    # as lost. None (STL_STALL_SECONDS unset) means the job's own time cap + 600 s.
+    stall_seconds: float | None = None
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -22,18 +28,15 @@ class Settings:
         dispatch = env("STL_DISPATCH", "celery")
         if dispatch not in ("celery", "none"):
             raise ValueError(f"STL_DISPATCH must be 'celery' or 'none', got {dispatch!r}")
+        profile = env("STL_BUDGET_PROFILE", DEFAULT_PROFILE)
         try:
-            cap = float(env("STL_TIME_CAP_SECONDS", "7200"))
+            check_profile(profile)
         except ValueError as e:
-            raise ValueError(f"STL_TIME_CAP_SECONDS must be a number: {e}") from e
-        if not cap > 0 or cap == float("inf"):
-            raise ValueError(f"STL_TIME_CAP_SECONDS must be positive and finite, got {cap}")
-        try:
-            stall = float(env("STL_STALL_SECONDS", str(cap + 600)))
-        except ValueError as e:
-            raise ValueError(f"STL_STALL_SECONDS must be a number: {e}") from e
-        if not stall > 0 or stall == float("inf"):
-            raise ValueError(f"STL_STALL_SECONDS must be positive and finite, got {stall}")
+            raise ValueError(f"STL_BUDGET_PROFILE: {e}") from e
+        cap = _seconds("STL_TIME_CAP_SECONDS")
+        stall = _seconds("STL_STALL_SECONDS")
+        if stall is None and cap is not None:
+            stall = cap + 600
         origins = env("STL_CORS_ORIGINS", "http://localhost:3010")
         return cls(
             database_url=env("DATABASE_URL", "sqlite:///./outputs/api.db"),
@@ -41,9 +44,24 @@ class Settings:
             max_upload_mb=int(env("STL_MAX_UPLOAD_MB", "200")),
             cors_origins=[o.strip() for o in origins.split(",") if o.strip()],
             dispatch=dispatch,
+            budget_profile=profile,
             time_cap_seconds=cap,
             stall_seconds=stall,
         )
+
+
+def _seconds(name: str) -> float | None:
+    """A positive, finite number of seconds from the environment; None when unset."""
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return None
+    try:
+        value = float(raw)
+    except ValueError as e:
+        raise ValueError(f"{name} must be a number: {e}") from e
+    if not value > 0 or value == float("inf"):
+        raise ValueError(f"{name} must be positive and finite, got {value}")
+    return value
 
 
 def get_settings() -> Settings:

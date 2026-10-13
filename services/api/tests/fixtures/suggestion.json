@@ -1,6 +1,0 @@
-{
-  "available": true,
-  "generator": "gaussian_copula",
-  "probabilities": {"gaussian_copula": 0.62, "mst_eps1": 0.23, "ctgan": 0.15},
-  "model": {"n_datasets": 25, "n_none": 1, "trained_at": "2026-10-10T00:00:00+00:00"}
-}

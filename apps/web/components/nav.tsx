@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Menu, X } from "lucide-react";
 import { useState } from "react";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { cn } from "@/lib/utils";
 
 const LINKS = [
@@ -29,16 +30,19 @@ export function Nav() {
         <Link href="/" className="font-semibold tracking-tight">
           Synthetic Data Trust Lab
         </Link>
-        <button
-          type="button"
-          className="ml-auto rounded-md p-2 hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring sm:hidden"
-          aria-expanded={open}
-          aria-controls="main-nav"
-          aria-label={open ? "Close menu" : "Open menu"}
-          onClick={() => setOpen((o) => !o)}
-        >
-          {open ? <X className="size-5" aria-hidden="true" /> : <Menu className="size-5" aria-hidden="true" />}
-        </button>
+        <div className="ml-auto flex items-center gap-1 sm:order-last">
+          <ThemeToggle />
+          <button
+            type="button"
+            className="rounded-md p-2 hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring sm:hidden"
+            aria-expanded={open}
+            aria-controls="main-nav"
+            aria-label={open ? "Close menu" : "Open menu"}
+            onClick={() => setOpen((o) => !o)}
+          >
+            {open ? <X className="size-5" aria-hidden="true" /> : <Menu className="size-5" aria-hidden="true" />}
+          </button>
+        </div>
         <nav
           id="main-nav"
           aria-label="Main"

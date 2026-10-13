@@ -8,8 +8,12 @@ gaussian_copula: {}
 bayesian_network: {}
 ctgan: {epochs: "${budget.epochs}"}
 tvae: {epochs: "${budget.epochs}"}
+sdv_ctgan: {epochs: "${budget.epochs}"}
+sdv_tvae: {epochs: "${budget.epochs}"}
 tabddpm: {epochs: "${budget.epochs}"}
 great: {epochs: "${budget.epochs}"}
+# null (library) -> be-great README epochs=5 for this checkpoint (stl_synthcity.great).
+great_qwen: {epochs: "${budget.epochs}"}
 mst_eps0.1: {}
 mst_eps1: {}
 mst_eps10: {}

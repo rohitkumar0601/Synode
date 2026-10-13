@@ -109,6 +109,8 @@ def _merge_synthcity(sc: dict | None, fid: FidelityMetrics, priv: PrivacyMetrics
         setattr(sections[section], field, sc.get(key))
     if "mia_domias_advantage" not in sc:  # metrics_version 1 files
         priv.mia_domias_advantage = sc.get("mia_advantage")
+    if sc.get("domias_status") and sc.get("domias_status") != "ok":
+        warnings.append(f"DOMIAS: {sc['domias_status']}")
 
 
 def evaluate(job: JobSpec, splits: Splits, synth: pd.DataFrame, metadata: TableMetadata,

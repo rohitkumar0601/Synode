@@ -15,13 +15,16 @@ Input preparation, done on the sample only (pymfe needs no NaN in numeric arrays
 
 Registered datasets are already imputed by ``stl_core.metadata.prepare``; the imputation
 here only matters for raw tables.
+
+The RQ3 predictor covers classification datasets only: ``compute_for_dataset`` skips pymfe
+for any other task (a numeric target would make every distinct value a class).
 """
 
 from __future__ import annotations
 
-import concurrent.futures
 import json
 import math
+import multiprocessing as mp
 import warnings
 from datetime import datetime, timezone
 
@@ -99,34 +102,75 @@ def _run_pymfe(X: np.ndarray, y: np.ndarray, cat_cols: list[int], seed: int):
         return mfe.extract(suppress_warnings=True)
 
 
+def _as_dict(names, values) -> dict[str, float]:
+    return {str(n): _to_float(v) for n, v in zip(names, values, strict=True)}
+
+
+def _child_entry(conn, fn, args) -> None:
+    """Spawned child: run ``fn(*args)`` (pymfe) and send ("ok", features) or
+    ("error", message) to the parent."""
+    try:
+        conn.send(("ok", _as_dict(*fn(*args))))
+    except BaseException as exc:  # noqa: BLE001 -- reported to the parent
+        conn.send(("error", f"{type(exc).__name__}: {exc}"))
+    finally:
+        conn.close()
+
+
+def _stop(proc) -> None:
+    if proc.is_alive():
+        proc.terminate()
+        proc.join(10)
+    if proc.is_alive():
+        proc.kill()
+    proc.join()
+
+
+def _run_in_child(args: tuple, timeout_s: float) -> dict[str, float]:
+    """Run pymfe in a spawned child process, terminated if it has not answered within
+    ``timeout_s`` seconds (child start-up included), so no work is left behind."""
+    ctx = mp.get_context("spawn")
+    recv, send = ctx.Pipe(duplex=False)
+    proc = ctx.Process(target=_child_entry, args=(send, _run_pymfe, args), daemon=True)
+    proc.start()
+    send.close()
+    try:
+        if not recv.poll(timeout_s):
+            raise MetaFeatureError(f"meta-feature extraction timed out after {timeout_s}s")
+        try:
+            status, payload = recv.recv()
+        except EOFError:
+            proc.join(5)
+            raise MetaFeatureError("meta-feature extraction process exited with code "
+                                   f"{proc.exitcode} without a result") from None
+    finally:
+        recv.close()
+        _stop(proc)
+    if status != "ok":
+        raise MetaFeatureError(f"pymfe failed: {payload}")
+    return payload
+
+
 def extract(df: pd.DataFrame, target: str, metadata: TableMetadata, seed: int,
             max_rows: int = 5000, timeout_s: float | None = None) -> dict[str, float]:
     """Meta-features of ``df`` as ``{name: float}``; a feature pymfe could not compute (or
     that is not finite) is NaN. Raises MetaFeatureError only if pymfe fails entirely.
 
-    ``timeout_s`` runs pymfe in a worker thread and gives up after that many seconds. The
-    thread cannot be killed: it keeps running in the background until pymfe returns, and
-    its result is discarded.
+    ``timeout_s=None`` runs pymfe in this process (CLI / benchmark). With ``timeout_s``,
+    pymfe runs in a spawned child process that is terminated after that many seconds
+    (start-up included), so a timed-out extraction leaves no work running.
     """
     if target != metadata.target:
         raise ValueError(f"target {target!r} does not match metadata target "
                          f"{metadata.target!r}")
     X, y, cat_cols = _prepare(sample_rows(df, metadata, max_rows, seed), metadata)
-    try:
-        if timeout_s is None:
-            names, values = _run_pymfe(X, y, cat_cols, seed)
-        else:
-            pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-            try:
-                future = pool.submit(_run_pymfe, X, y, cat_cols, seed)
-                names, values = future.result(timeout=timeout_s)
-            finally:
-                pool.shutdown(wait=False)
-    except concurrent.futures.TimeoutError as exc:
-        raise MetaFeatureError(f"meta-feature extraction timed out after {timeout_s}s") from exc
-    except Exception as exc:
-        raise MetaFeatureError(f"pymfe failed: {type(exc).__name__}: {exc}") from exc
-    out = {str(n): _to_float(v) for n, v in zip(names, values, strict=True)}
+    if timeout_s is None:
+        try:
+            out = _as_dict(*_run_pymfe(X, y, cat_cols, seed))
+        except Exception as exc:
+            raise MetaFeatureError(f"pymfe failed: {type(exc).__name__}: {exc}") from exc
+    else:
+        out = _run_in_child((X, y, cat_cols, seed), timeout_s)
     if not out:
         raise MetaFeatureError("pymfe returned no meta-features")
     return out
@@ -143,8 +187,16 @@ def compute_for_dataset(store: ArtifactStore, dataset_id: str, seed: int = 0,
 
     If extraction fails entirely, ``{"error": ..., "seed", "pymfe_version", "groups",
     "computed_at"}`` (no ``features`` key) is written instead, so the dataset can be
-    excluded with a recorded reason, and MetaFeatureError is re-raised."""
+    excluded with a recorded reason, and MetaFeatureError is re-raised.
+
+    A non-classification dataset is not given to pymfe at all: ``{"skipped": "<task>
+    target", "task", "computed_at"}`` (no ``features`` key) is written and returned."""
     metadata = load_metadata(store, dataset_id)
+    if metadata.task != "classification":
+        record = {"skipped": f"{metadata.task} target", "task": metadata.task,
+                  "computed_at": _now()}
+        _write(store, metafeatures_key(dataset_id), record)
+        return record
     train = ensure_splits(store, dataset_id, seed).train
     record = {"seed": seed, "pymfe_version": pymfe.__version__, "groups": list(GROUPS),
               "summary": list(SUMMARY)}
@@ -155,8 +207,10 @@ def compute_for_dataset(store: ArtifactStore, dataset_id: str, seed: int = 0,
         record.update(error=str(exc), computed_at=_now())
         _write(store, metafeatures_key(dataset_id), record)
         raise
+    # rows given to pymfe: sample_rows keeps the rows with a target, at most max_rows
     record = {"features": {k: None if math.isnan(v) else v for k, v in feats.items()},
-              "n_rows_used": int(min(len(train), max_rows)), **record, "computed_at": _now()}
+              "n_rows_used": int(min(train[metadata.target].notna().sum(), max_rows)),
+              **record, "computed_at": _now()}
     _write(store, metafeatures_key(dataset_id), record)
     return record
 

@@ -11,7 +11,8 @@ RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund \
 COPY . .
 ARG NEXT_PUBLIC_API_URL=http://localhost:8010
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL} NEXT_TELEMETRY_DISABLED=1
-RUN npm run build && npm prune --omit=dev
+# --no-audit: the audit round-trip made prune take ~40 min on the dev machine.
+RUN npm run build && npm prune --omit=dev --no-audit --no-fund
 
 FROM node:24-bookworm-slim
 WORKDIR /app

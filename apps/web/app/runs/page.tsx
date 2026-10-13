@@ -4,13 +4,15 @@ import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle } from "lucide-react";
 import Link from "next/link";
 import { ErrorState } from "@/components/error-state";
+import { TerminateRunButton } from "@/components/run-controls";
+import { StageBar } from "@/components/stage-bar";
 import { StatusBadge } from "@/components/status-badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { listRuns } from "@/lib/api";
 import { pollMs } from "@/lib/poll";
-import { jobTotals, runState } from "@/lib/run-state";
+import { failedNote, jobTotals, runState } from "@/lib/run-state";
 import { cn } from "@/lib/utils";
 
 export default function RunsPage() {
@@ -55,7 +57,8 @@ export default function RunsPage() {
           </TableHeader>
           <TableBody>
             {runs.data.map((r) => {
-              const { total, finished } = jobTotals(r.counts);
+              const { total, finished, failed } = jobTotals(r.counts);
+              const note = failedNote(r);
               return (
                 <TableRow key={r.run_id}>
                   <TableCell>
@@ -67,11 +70,19 @@ export default function RunsPage() {
                   <TableCell>{r.generators.length}</TableCell>
                   <TableCell>{r.seeds.length}</TableCell>
                   <TableCell className="tabular-nums">
-                    {finished} / {total}
+                    <div className="flex min-w-36 flex-col gap-1">
+                      <span>
+                        {finished} / {total}
+                        {failed > 0 ? <span className="text-muted-foreground"> ({failed} failed)</span> : null}
+                      </span>
+                      <StageBar counts={r.counts} label={`Progress of ${r.run_id}`} size="sm" />
+                    </div>
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap items-center gap-2">
                       <StatusBadge state={runState(r)} />
+                      {note && <span className="text-xs text-muted-foreground">{note}</span>}
+                      {!r.done && <TerminateRunButton runId={r.run_id} compact />}
                       {r.stale && (
                         <span
                           className="inline-flex items-center gap-1 text-xs text-muted-foreground"

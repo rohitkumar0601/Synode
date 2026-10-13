@@ -6,6 +6,7 @@ import { http, HttpResponse } from "msw";
 import type { ColumnType, CreateRunBody, Dataset, DatasetSuggestion, PerJobReport, Run, RunJob, RunReport, RunSummary } from "@/lib/types";
 import { PRESETS } from "@/lib/presets";
 import {
+  BUDGET_PROFILE_IDS,
   BUILTINS,
   DONE_CANDIDATES,
   GENERATORS,
@@ -16,6 +17,7 @@ import {
   SUGGESTION_NOT_REGISTERED,
   aggregated,
   builtinDataset,
+  generatorParamsFor,
   candidatesFor,
   initialDatasets,
   recommendation,
@@ -32,6 +34,8 @@ interface MockRun {
   preset: string;
   /** Normalised weights stored with the run; null for imported runs. */
   weights: Axes | null;
+  /** Training-budget profile; null for runs created before profiles (e.g. imported ones). */
+  budget_profile: string | null;
   /** Number of polls so far; planned job i is at state index clamp(polls - i). Ignored when `finished`. */
   polls: number;
   finished: boolean;
@@ -43,6 +47,8 @@ interface MockRun {
   stale?: boolean;
   /** Polls no longer advance the run (tests pin a live run at one point of its timeline). */
   frozen?: boolean;
+  /** Job ids cancelled by POST /runs/{id}/cancel (cleared, and re-queued, by a retry). */
+  cancelledIds?: string[];
 }
 
 interface MockState {
@@ -64,6 +70,7 @@ function initialState(): MockState {
         seeds: [0, 1],
         preset: "balanced",
         weights: presetWeights("balanced"),
+        budget_profile: "library",
         polls: 0,
         finished: true,
       },
@@ -74,6 +81,7 @@ function initialState(): MockState {
         seeds: [0],
         preset: "balanced",
         weights: presetWeights("balanced"),
+        budget_profile: "library",
         polls: 0,
         finished: false,
       },
@@ -97,6 +105,7 @@ export function seedFailedRun(run_id = "adult-partial"): void {
     seeds: [0],
     preset: "balanced",
     weights: presetWeights("balanced"),
+    budget_profile: "equal50",
     polls: 0,
     finished: true,
     failing: ["tvae__s0"],
@@ -137,6 +146,7 @@ export function seedImport(): string {
       seeds: [0, 1],
       preset: "balanced",
       weights: null,
+      budget_profile: null,
       polls: 0,
       finished: true,
     });
@@ -144,6 +154,7 @@ export function seedImport(): string {
   return IMPORTED_RUN_ID;
 }
 
+const TERMINAL = new Set<string>(["done", "failed", "cancelled"]);
 const jobId = (generator: string, seed: number) => `${generator}__s${seed}`;
 const clampState = (i: number) => JOB_STATES[Math.min(Math.max(i, 0), JOB_STATES.length - 1)];
 
@@ -152,6 +163,7 @@ function toRun(r: MockRun): Run {
   const jobs: RunJob[] = planned.map(([generator, seed], i) => {
     const job_id = jobId(generator, seed);
     if (r.failing?.includes(job_id)) return { job_id, generator, seed, state: "failed", error: OOM_TRACEBACK };
+    if (r.cancelledIds?.includes(job_id)) return { job_id, generator, seed, state: "cancelled", error: "cancelled by user" };
     const retriedAt = r.retried?.indexOf(job_id) ?? -1;
     const st = retriedAt >= 0 ? clampState(r.polls - retriedAt) : r.finished ? "done" : clampState(r.polls - i);
     return { job_id, generator, seed, state: st, error: null };
@@ -165,9 +177,11 @@ function toRun(r: MockRun): Run {
     generators: r.generators,
     seeds: r.seeds,
     preset: r.preset,
+    budget_profile: r.budget_profile,
     counts,
-    done: jobs.length > 0 && jobs.every((j) => j.state === "done" || j.state === "failed"),
+    done: jobs.length > 0 && jobs.every((j) => TERMINAL.has(j.state)),
     stale: r.stale ?? false,
+    cancelled: jobs.some((j) => j.state === "cancelled"),
     jobs,
     weights: r.weights,
   };
@@ -257,6 +271,13 @@ export const handlers = [
         ? SUGGESTION_AVAILABLE
         : SUGGESTION_NO_PREDICTOR;
     return HttpResponse.json(body);
+  }),
+
+  http.post("*/datasets/:id/suggestion/refresh", ({ params }) => {
+    const d = findDataset(params.id);
+    if (!d) return err(404, `dataset '${String(params.id)}' not found`);
+    if (!d.registered) return err(409, `dataset ${d.id} is not registered`);
+    return HttpResponse.json({ dataset_id: d.id, queued: true }, { status: 202 });
   }),
 
   http.post("*/datasets/builtin/:name", ({ params }) => {
@@ -400,6 +421,10 @@ export const handlers = [
     }
     if (seeds.length === 0) return validation("seeds", "seeds must not be empty");
     if (new Set(seeds).size !== seeds.length) return validation("seeds", "seeds must be unique");
+    const profile = body.budget_profile ?? "library";
+    if (!(BUDGET_PROFILE_IDS as readonly string[]).includes(profile)) {
+      return validation("budget_profile", `unknown budget profile '${profile}'; known: ${pyList([...BUDGET_PROFILE_IDS])}`);
+    }
     const d = findDataset(body.dataset_id);
     if (!d || !d.registered) return err(409, `dataset '${body.dataset_id}' is not registered`);
     const resolved = resolveWeights(body.preset ?? "balanced", body.weights ?? null);
@@ -412,6 +437,7 @@ export const handlers = [
       seeds,
       preset: resolved[0],
       weights: resolved[1],
+      budget_profile: profile,
       polls: 0,
       finished: false,
     };
@@ -451,6 +477,9 @@ export const handlers = [
         j.state === "done" && j.generator === "train_copy"
           ? ["detection_auc 0.312 < 0.4: synthetic rows likely duplicate real rows (memorisation signal)"]
           : [],
+      // written before fit: none for queued jobs, none at all for runs older than budget profiles
+      generator_params:
+        run.budget_profile === null || j.state === "queued" ? null : generatorParamsFor(j.generator, j.seed, run.budget_profile),
     }));
     const report: RunReport = {
       run_id: run.run_id,
@@ -490,13 +519,42 @@ export const handlers = [
   http.post("*/runs/:id/retry", ({ params }) => {
     const run = state.runs.find((r) => r.run_id === params.id);
     if (!run) return err(404, `run '${String(params.id)}' not found`);
-    const retried = run.failing ?? [];
+    const retried = [...(run.failing ?? []), ...(run.cancelledIds ?? [])];
     if (retried.length) {
+      // every other job is finished: a cancel only leaves done/failed jobs behind
+      if (run.cancelledIds?.length) {
+        run.finished = true;
+        run.frozen = false;
+      }
       run.failing = [];
+      run.cancelledIds = [];
       run.retried = retried;
       run.polls = 0;
     }
     return HttpResponse.json({ run_id: run.run_id, retried });
+  }),
+
+  /** POST /runs/{id}/cancel: unfinished jobs become cancelled (202, idempotent). */
+  http.post("*/runs/:id/cancel", ({ params }) => {
+    const run = state.runs.find((r) => r.run_id === params.id);
+    if (!run) return err(404, `run '${String(params.id)}' not found`);
+    const open = toRun(run).jobs.filter((j) => !TERMINAL.has(j.state)).map((j) => j.job_id);
+    run.cancelledIds = [...(run.cancelledIds ?? []), ...open];
+    run.retried = run.retried?.filter((id) => !open.includes(id));
+    run.frozen = true;
+    return HttpResponse.json({ run_id: run.run_id, cancelled: open.length }, { status: 202 });
+  }),
+
+  /** POST /runs/{id}/resume: re-enqueues jobs stuck at generated (the mock timeline then moves on). */
+  http.post("*/runs/:id/resume", ({ params }) => {
+    const run = state.runs.find((r) => r.run_id === params.id);
+    if (!run) return err(404, `run '${String(params.id)}' not found`);
+    if (run.cancelledIds?.length) {
+      return err(409, `run ${run.run_id} was cancelled; retry it to run the cancelled jobs again`);
+    }
+    const resumed = toRun(run).jobs.filter((j) => j.state === "generated").map((j) => j.job_id);
+    if (resumed.length) run.frozen = false;
+    return HttpResponse.json({ run_id: run.run_id, resumed });
   }),
 
   /** POST /import-results: the bundle's run lands in the run list; an unknown dataset gets a placeholder row. */
